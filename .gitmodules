@@ -1,2 +1,3 @@
-[submodule "themes/hugo-theme-stack"]
-	url = https://github.com/CaiJimmy/hugo-theme-stack
+[submodule "hugo-theme-stack"]
+url = git@github.com:CaiJimmy/hugo-theme-stack.git
+path = themes/hugo-theme-stack
