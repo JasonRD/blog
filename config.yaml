@@ -160,7 +160,7 @@ params:
     opengraph:
         twitter:
             # Your Twitter username
-            site:
+            site: jasonxie666
 
             # Available values: summary, summary_large_image
             card: summary_large_image
@@ -199,7 +199,7 @@ menu:
 
         - identifier: twitter
           name: Twitter
-          url: https://twitter.com
+          url: https://twitter.com/jasonxie666
           params:
               icon: brand-twitter
 

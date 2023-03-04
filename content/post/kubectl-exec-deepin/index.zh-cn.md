@@ -1,11 +1,12 @@
 ---
-title: "kubectl exec deepin"
-description: "代码级别深入研究"
+title: "从 kubectl exec 异常问题开始"
+description: "代码级别深入研究 kubectl exec 底层逻辑"
 date: 2022-03-01
-slug: kubernetes
+slug: kubectl-exec-deepin
 image: helena-hertz-wWZzXlDpMog-unsplash.jpg
 categories:
     - kubernetes
+    - runtime
 ---
 
 ## 问题现象
