@@ -1,0 +1,690 @@
+<!doctype html><html lang=en dir=ltr><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=description content="对 kube-router、kube-proxy 中 ipvs 刷新逻辑进行代码研究，解决生产出现优雅下线抖动问题"><title>endpoint 更新后 vip 转发实现探究</title><link rel=canonical href=https://jasonrd.github.io/blog/p/how-endpoint-flush-ipvs/><link rel=stylesheet href=/blog/scss/style.min.8191399262444ab68b72a18c97392f5349be20a1615d77445be51e974c144cff.css><meta property="og:title" content="endpoint 更新后 vip 转发实现探究"><meta property="og:description" content="对 kube-router、kube-proxy 中 ipvs 刷新逻辑进行代码研究，解决生产出现优雅下线抖动问题"><meta property="og:url" content="https://jasonrd.github.io/blog/p/how-endpoint-flush-ipvs/"><meta property="og:site_name" content="jason's 博客"><meta property="og:type" content="article"><meta property="article:section" content="Post"><meta property="article:published_time" content="2021-12-19T00:00:00+00:00"><meta property="article:modified_time" content="2021-12-19T00:00:00+00:00"><meta property="og:image" content="https://jasonrd.github.io/blog/p/how-endpoint-flush-ipvs/the-creative-exchange-d2zvqp3fpro-unsplash.jpg"><meta name=twitter:site content="@jasonxie666"><meta name=twitter:creator content="@jasonxie666"><meta name=twitter:title content="endpoint 更新后 vip 转发实现探究"><meta name=twitter:description content="对 kube-router、kube-proxy 中 ipvs 刷新逻辑进行代码研究，解决生产出现优雅下线抖动问题"><meta name=twitter:card content="summary_large_image"><meta name=twitter:image content="https://jasonrd.github.io/blog/p/how-endpoint-flush-ipvs/the-creative-exchange-d2zvqp3fpro-unsplash.jpg"></head><body class=article-page><script>(function(){const e="StackColorScheme";localStorage.getItem(e)||localStorage.setItem(e,"auto")})()</script><script>(function(){const t="StackColorScheme",e=localStorage.getItem(t),n=window.matchMedia("(prefers-color-scheme: dark)").matches===!0;e=="dark"||e==="auto"&&n?document.documentElement.dataset.scheme="dark":document.documentElement.dataset.scheme="light"})()</script><div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky"><button class="hamburger hamburger--spin" type=button id=toggle-menu aria-label=切换菜单>
+<span class=hamburger-box><span class=hamburger-inner></span></span></button><header><figure class=site-avatar><a href=/blog/><img src=/blog/img/avatar_hu92a1f0f4dac05816138a9efb01424f59_787601_300x0_resize_box_3.png width=300 height=300 class=site-logo loading=lazy alt=Avatar></a>
+<span class=emoji>🍥</span></figure><div class=site-meta><h1 class=site-name><a href=/blog>jason's 博客</a></h1><h2 class=site-description>Welcom</h2></div></header><ol class=social-menu><li><a href=https://github.com/JasonRD target=_blank title=GitHub rel=me><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6.0 00-1.3-3.2 4.2 4.2.0 00-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3.0 00-6.2.0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2.0 00-.1 3.2A4.6 4.6.0 004 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg></a></li><li><a href=https://twitter.com/jasonxie666 target=_blank title=Twitter rel=me><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-twitter" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M22 4.01c-1 .49-1.98.689-3 .99-1.121-1.265-2.783-1.335-4.38-.737S11.977 6.323 12 8v1c-3.245.083-6.135-1.395-8-4 0 0-4.182 7.433 4 11-1.872 1.247-3.739 2.088-6 2 3.308 1.803 6.913 2.423 10.034 1.517 3.58-1.04 6.522-3.723 7.651-7.742a13.84 13.84.0 00.497-3.753C20.18 7.773 21.692 5.25 22 4.009z"/></svg></a></li></ol><ol class=menu id=main-menu><li><a href=/blog/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><polyline points="5 12 3 12 12 3 21 12 19 12"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/><path d="M9 21v-6a2 2 0 012-2h2a2 2 0 012 2v6"/></svg><span>主页</span></a></li><li><a href=/blog/%E5%85%B3%E4%BA%8E/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="7" r="4"/><path d="M6 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"/></svg><span>关于</span></a></li><li><a href=/blog/archives/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><rect x="3" y="4" width="18" height="4" rx="2"/><path d="M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg><span>Archives</span></a></li><li><a href=/blog/search/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="10" cy="10" r="7"/><line x1="21" y1="21" x2="15" y2="15"/></svg><span>Search</span></a></li><li><a href=/blog/links/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><path d="M10 14a3.5 3.5.0 005 0l4-4a3.5 3.5.0 00-5-5l-.5.5"/><path d="M14 10a3.5 3.5.0 00-5 0l-4 4a3.5 3.5.0 005 5l.5-.5"/></svg><span>Links</span></a></li><div class=menu-bottom-section><li id=i18n-switch><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 5h7"/><path d="M9 3v2c0 4.418-2.239 8-5 8"/><path d="M5 9c-.003 2.144 2.952 3.908 6.7 4"/><path d="M12 20l4-9 4 9"/><path d="M19.1 18h-6.2"/></svg><select name=language onchange="window.location.href=this.selectedOptions[0].value"><option value=https://jasonrd.github.io/blog/en/>English</option><option value=https://jasonrd.github.io/blog/ selected>中文</option></select></li><li id=dark-mode-toggle><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="8" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="16" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg><span>暗色模式</span></li></div></ol></aside><aside class="sidebar right-sidebar sticky"><section class="widget archives"><div class=widget-icon><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="11" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="13" y2="20"/></svg></div><h2 class="widget-title section-title">目录</h2><div class=widget--toc><nav id=TableOfContents><ol><li><a href=#背景>背景</a></li><li><a href=#ipvs-vip-实现>IPVS VIP 实现</a></li><li><a href=#常用开源组件实现逻辑>常用开源组件实现逻辑</a><ol><li><a href=#kube-router>kube-router</a><ol><li><a href=#源码分析>源码分析</a></li><li><a href=#总结>总结</a></li></ol></li><li><a href=#kube-proxy-实现逻辑>kube-proxy 实现逻辑</a><ol><li><a href=#源码>源码</a></li></ol></li></ol></li><li><a href=#优化方案>优化方案</a></li><li><a href=#参考>参考</a></li></ol></nav></div></section></aside><main class="main full-width"><article class="has-image main-article"><header class=article-header><div class=article-image><a href=/blog/p/how-endpoint-flush-ipvs/><img src=/blog/p/how-endpoint-flush-ipvs/the-creative-exchange-d2zvqp3fpro-unsplash_huf941de4769045cdfa8c9ee7036519a2a_35369_800x0_resize_q75_box.jpg srcset="/blog/p/how-endpoint-flush-ipvs/the-creative-exchange-d2zvqp3fpro-unsplash_huf941de4769045cdfa8c9ee7036519a2a_35369_800x0_resize_q75_box.jpg 800w, /blog/p/how-endpoint-flush-ipvs/the-creative-exchange-d2zvqp3fpro-unsplash_huf941de4769045cdfa8c9ee7036519a2a_35369_1600x0_resize_q75_box.jpg 1600w" width=800 height=566 loading=lazy alt="Featured image of post endpoint 更新后 vip 转发实现探究"></a></div><div class=article-details><header class=article-category><a href=/blog/categories/kubernetes/>kubernetes</a>
+<a href=/blog/categories/network/>network</a>
+<a href=/blog/categories/ipvs/>ipvs</a></header><div class=article-title-wrapper><h2 class=article-title><a href=/blog/p/how-endpoint-flush-ipvs/>endpoint 更新后 vip 转发实现探究</a></h2><h3 class=article-subtitle>对 kube-router、kube-proxy 中 ipvs 刷新逻辑进行代码研究，解决生产出现优雅下线抖动问题</h3></div><footer class=article-time><div><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><path d="M11.795 21H5a2 2 0 01-2-2V7a2 2 0 012-2h12a2 2 0 012 2v4"/><circle cx="18" cy="18" r="4"/><path d="M15 3v4"/><path d="M7 3v4"/><path d="M3 11h16"/><path d="M18 16.496V18l1 1"/></svg><time class=article-time--published>Dec 19, 2021</time></div><div><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg><time class=article-time--reading>阅读时长: 11 分钟</time></div></footer></div></header><section class=article-content><h2 id=背景>背景</h2><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-1.png width=1182 height=564 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-1_hu8f159a10592f50917081840a2902570d_129703_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-1_hu8f159a10592f50917081840a2902570d_129703_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=209 data-flex-basis=502px></p><p>最近业务应用使用 Service ip 进行压测时，当容器销毁时，部分请求会出现 connect refused 错误。按照文档 <a class=link href=/blog/p/service-cause-failure/>云上 pod 下线引起短时服务不可用</a> 进行优雅下线优化后有一定改善，但是仍然存在 connect refused 异常。本文通过分析 kube-router 实现 vip 的逻辑，进行定位问题根因，并举一反三对 kubernetes 默认组件 kube-proxy service IP 实现进行研究和分析。</p><h2 id=ipvs-vip-实现>IPVS VIP 实现</h2><p>ipvs (IP Virtual Server) 是工作在内核态的4层负载均衡，也就是我们常说的4层<code>LAN</code>交换，作为 Linux 内核的一部分。<code>ipvs</code>运行在主机上，在真实服务器集群前充当负载均衡器。<code>ipvs</code>可以将基于<code>TCP</code>和<code>UDP</code>的服务请求转发到真实服务器上，从而达到通过单个 VIP 代理多个后端真实服务的目的。IPVS 和 iptables 一样都是基于内核底层 netfilter 实现，netfilter 主要通过各个链的钩子实现包处理和转发。</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-ipvs-vip-1.png width=964 height=718 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-ipvs-vip-1_huab024c5a8602f26ccea1e915b99c09be_53972_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-ipvs-vip-1_huab024c5a8602f26ccea1e915b99c09be_53972_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=134 data-flex-basis=322px></p><p>ipvs 作为内核中负载均衡，有多种负载策略：rr（轮询）、wrr（加权轮询）、sh（源地址哈希）等，默认使用 rr 模式。vip 后面关联多个 pod ip， 通过 VIP 请求后 ipvs 会根据配置的均衡策略选取其中一个 pod ip 进行流量转发。</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-ipvs-vip-2.png width=1200 height=270 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-ipvs-vip-2_huf7e88ebefdaf87c310166f844fa56299_45063_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-ipvs-vip-2_huf7e88ebefdaf87c310166f844fa56299_45063_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=444 data-flex-basis=1066px></p><p>如上图，使用 ipvsadm 工具查看 10.59.38.148:8001 转发的 RS（Real Server） 有两个：10.60.10.7、10.60.14.8，转发策略为 RR，其中 Weight 标识每个 RS 的权重。</p><p>当 Weight=0 时，新连接不会转发到该 RS；但是，已建立的连接仍会保持，直到连接释放。ActiveConn 是活动连接数，也就是 tcp 连接状态的 ESTABLISHED；InActConn 是指除了 ESTABLISHED 以外的，所有的其它状态的 tcp 连接。</p><h2 id=常用开源组件实现逻辑>常用开源组件实现逻辑</h2><h3 id=kube-router>kube-router</h3><p>先已公司使用 cni 插件为 kube-router 作为研究对象，通过使用部署一个简单的 go http server 两副本应用，观察删除一个 Pod 后，会发生哪些变化：</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-1.png width=1114 height=556 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-1_hu845bc3754576c5a899483e213f85c0a4_48649_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-1_hu845bc3754576c5a899483e213f85c0a4_48649_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=200 data-flex-basis=480px> <img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-2.png width=1088 height=554 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-2_huc9e160b02fcb11936a45064fa734e453_132619_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-2_huc9e160b02fcb11936a45064fa734e453_132619_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=196 data-flex-basis=471px></p><p>上面两张图，分别对应 http server 在是否处理 SIGTERM 信号场景下对 ipvs 更新的影响。</p><p>上图可以，看出当删除 Pod 时，在 20s+ 以后 kube-router 才会将被删除的 pod IP 在 ipvs 中摘掉。而摘掉流量方式是直接在 ipvs 中删除对应的 RS (10.60.10.7)：</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-3.png width=1206 height=254 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-3_hu8f95d6b490e533956a9e32eced276821_43612_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-3_hu8f95d6b490e533956a9e32eced276821_43612_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=474 data-flex-basis=1139px>==》<img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-4.png width=1194 height=266 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-4_hubdd24584f240bb78f28c61267cc8b943_43913_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-4_hubdd24584f240bb78f28c61267cc8b943_43913_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=448 data-flex-basis=1077px></p><p>这样，在两种场景下会出现异常：</p><ol><li>pod 容器已完全删除，但是 ipvs 还会转发流量到被删除的 Pod IP 上。也就容器完全删除早于 ipvs 中 RS 的删除动作；</li><li>Ipvs 摘掉pod 流量时，存在未释放的连接。也就是 ipvs 中 RS 删除早于 pod 销毁，并且存在持久化的会话；</li></ol><p>第一种问题还是未做好优雅下线导致的，可以通过 prestop 来增加优雅下线，提前将连接释放掉。但是，由于删除后 20s 仍然又新连接进来，虽然解决了第一个场景问题，但是第二个场景问题还是会存在的。</p><p>在上述业务压测出现问题的场景中：</p><ol><li>业务容器已经做了优雅下线（等待15s+业务层开始优雅下线逻辑），整个优雅下线时间>=15s；</li><li>修改业务容器 terminatedGracePeriod 时长为 120s 后，我们抓包发现没有新流量进入，但仍然存在 connect refused 异常；</li></ol><p>出现问题场景，属于第二种。那第二种问题如何解决呢？回答这个问题前，先要弄清楚下面疑问：</p><ol><li>首先，为什么 ipvs 在 20s 后才会将 pod ip 摘掉；</li><li>之前有了解过 ipvs 中 RS weight=0 时，新流量不会转发到该 RS，那 kube-router 有没有实现这个逻辑呢？</li></ol><p>带着上面两个问题，我们来看一下 kube-router 源码。</p><h4 id=源码分析>源码分析</h4><p>kube-router 内部会通过 list/watch 来监听 endpoint 和 service 更新，当 endpoint 发生变更（pod 删除）</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// proxy/network_services_controller.go
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>OnEndpointsUpdate</span><span class=p>(</span><span class=nx>ep</span> <span class=o>*</span><span class=nx>api</span><span class=p>.</span><span class=nx>Endpoints</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=o>...</span> <span class=o>...</span>
+</span></span><span class=line><span class=cl>	<span class=c1>// build new service and endpoints map to reflect the change
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>newServiceMap</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>buildServicesInfo</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>	<span class=nx>newEndpointsMap</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>buildEndpointsInfo</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nb>len</span><span class=p>(</span><span class=nx>newEndpointsMap</span><span class=p>)</span> <span class=o>!=</span> <span class=nb>len</span><span class=p>(</span><span class=nx>nsc</span><span class=p>.</span><span class=nx>endpointsMap</span><span class=p>)</span> <span class=o>||</span> <span class=p>!</span><span class=nx>reflect</span><span class=p>.</span><span class=nf>DeepEqual</span><span class=p>(</span><span class=nx>newEndpointsMap</span><span class=p>,</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>endpointsMap</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nx>endpointsMap</span> <span class=p>=</span> <span class=nx>newEndpointsMap</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nx>serviceMap</span> <span class=p>=</span> <span class=nx>newServiceMap</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Syncing IPVS services sync for update to endpoint: %s/%s&#34;</span><span class=p>,</span> <span class=nx>ep</span><span class=p>.</span><span class=nx>Namespace</span><span class=p>,</span> <span class=nx>ep</span><span class=p>.</span><span class=nx>Name</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nf>sync</span><span class=p>(</span><span class=nx>synctypeIpvs</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span> <span class=k>else</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Skipping IPVS services sync on endpoint: %s/%s update as nothing changed&#34;</span><span class=p>,</span> <span class=nx>ep</span><span class=p>.</span><span class=nx>Namespace</span><span class=p>,</span> <span class=nx>ep</span><span class=p>.</span><span class=nx>Name</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl><span class=c1>// OnServiceUpdate handle change in service update from the API server
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>OnServiceUpdate</span><span class=p>(</span><span class=nx>svc</span> <span class=o>*</span><span class=nx>api</span><span class=p>.</span><span class=nx>Service</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=o>...</span> <span class=o>...</span>
+</span></span><span class=line><span class=cl>	<span class=c1>// build new service and endpoints map to reflect the change
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>newServiceMap</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>buildServicesInfo</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>	<span class=nx>newEndpointsMap</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>buildEndpointsInfo</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nb>len</span><span class=p>(</span><span class=nx>newServiceMap</span><span class=p>)</span> <span class=o>!=</span> <span class=nb>len</span><span class=p>(</span><span class=nx>nsc</span><span class=p>.</span><span class=nx>serviceMap</span><span class=p>)</span> <span class=o>||</span> <span class=p>!</span><span class=nx>reflect</span><span class=p>.</span><span class=nf>DeepEqual</span><span class=p>(</span><span class=nx>newServiceMap</span><span class=p>,</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>serviceMap</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nx>endpointsMap</span> <span class=p>=</span> <span class=nx>newEndpointsMap</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nx>serviceMap</span> <span class=p>=</span> <span class=nx>newServiceMap</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Syncing IPVS services sync on update to service: %s/%s&#34;</span><span class=p>,</span> <span class=nx>svc</span><span class=p>.</span><span class=nx>Namespace</span><span class=p>,</span> <span class=nx>svc</span><span class=p>.</span><span class=nx>Name</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nf>sync</span><span class=p>(</span><span class=nx>synctypeIpvs</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span> <span class=k>else</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Skipping syncing IPVS services for update to service: %s/%s as nothing changed&#34;</span><span class=p>,</span> <span class=nx>svc</span><span class=p>.</span><span class=nx>Namespace</span><span class=p>,</span> <span class=nx>svc</span><span class=p>.</span><span class=nx>Name</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>可以看到 endpoint 和 service 更新，都是先更新 nsc 的 endpointMap 和 serviceMap，然后执行 nsc.sync 函数。nsc.sync 函数将变更类型同步到 syncChan：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>//proxy/network_services_controller.go
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>sync</span><span class=p>(</span><span class=nx>syncType</span> <span class=kt>int</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=k>select</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=k>case</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>syncChan</span> <span class=o>&lt;-</span> <span class=nx>syncType</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>	<span class=k>default</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>2</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Already pending sync, dropping request for type %d&#34;</span><span class=p>,</span> <span class=nx>syncType</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>syncChan 在 NetworkServiceController 的 Run 函数中进行监听：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span><span class=lnt>37
+</span><span class=lnt>38
+</span><span class=lnt>39
+</span><span class=lnt>40
+</span><span class=lnt>41
+</span><span class=lnt>42
+</span><span class=lnt>43
+</span><span class=lnt>44
+</span><span class=lnt>45
+</span><span class=lnt>46
+</span><span class=lnt>47
+</span><span class=lnt>48
+</span><span class=lnt>49
+</span><span class=lnt>50
+</span><span class=lnt>51
+</span><span class=lnt>52
+</span><span class=lnt>53
+</span><span class=lnt>54
+</span><span class=lnt>55
+</span><span class=lnt>56
+</span><span class=lnt>57
+</span><span class=lnt>58
+</span><span class=lnt>59
+</span><span class=lnt>60
+</span><span class=lnt>61
+</span><span class=lnt>62
+</span><span class=lnt>63
+</span><span class=lnt>64
+</span><span class=lnt>65
+</span><span class=lnt>66
+</span><span class=lnt>67
+</span><span class=lnt>68
+</span><span class=lnt>69
+</span><span class=lnt>70
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// Run periodically sync ipvs configuration to reflect desired state of services and endpoints
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>Run</span><span class=p>(</span><span class=nx>healthChan</span> <span class=kd>chan</span><span class=o>&lt;-</span> <span class=o>*</span><span class=nx>healthcheck</span><span class=p>.</span><span class=nx>ControllerHeartbeat</span><span class=p>,</span> <span class=nx>stopCh</span> <span class=o>&lt;-</span><span class=kd>chan</span> <span class=kd>struct</span><span class=p>{},</span> <span class=nx>wg</span> <span class=o>*</span><span class=nx>sync</span><span class=p>.</span><span class=nx>WaitGroup</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=o>......</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=k>select</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=k>case</span> <span class=o>&lt;-</span><span class=nx>stopCh</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Shutting down network services controller&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>		<span class=k>return</span>
+</span></span><span class=line><span class=cl>	<span class=k>default</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>    <span class=c1>// kube-router 默认启动时，先更新一遍 ipvs 
+</span></span></span><span class=line><span class=cl><span class=c1></span>		<span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>doSync</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=nx>glog</span><span class=p>.</span><span class=nf>Fatalf</span><span class=p>(</span><span class=s>&#34;Failed to perform initial full sync %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nx>readyForUpdates</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=c1>// loop forever until notified to stop on stopCh
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=k>for</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>select</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>case</span> <span class=o>&lt;-</span><span class=nx>stopCh</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>			<span class=nx>nsc</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Lock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>			<span class=nx>nsc</span><span class=p>.</span><span class=nx>readyForUpdates</span> <span class=p>=</span> <span class=kc>false</span>
+</span></span><span class=line><span class=cl>			<span class=nx>nsc</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Unlock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>			<span class=nx>glog</span><span class=p>.</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Shutting down network services controller&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=k>return</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>		<span class=k>case</span> <span class=o>&lt;-</span><span class=nx>gracefulTicker</span><span class=p>.</span><span class=nx>C</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>			<span class=k>if</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>readyForUpdates</span> <span class=o>&amp;&amp;</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>gracefulTermination</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>				<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>3</span><span class=p>).</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Performing periodic graceful destination cleanup&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>				<span class=nx>nsc</span><span class=p>.</span><span class=nf>gracefulSync</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>    <span class=c1>// 从 syncChan 唤醒协程执行 ipvs 的更新/同步逻辑 
+</span></span></span><span class=line><span class=cl><span class=c1></span>		<span class=k>case</span> <span class=nx>perform</span> <span class=o>:=</span> <span class=o>&lt;-</span><span class=nx>nsc</span><span class=p>.</span><span class=nx>syncChan</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>			<span class=nx>healthcheck</span><span class=p>.</span><span class=nf>SendHeartBeat</span><span class=p>(</span><span class=nx>healthChan</span><span class=p>,</span> <span class=s>&#34;NSC&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=k>switch</span> <span class=nx>perform</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=k>case</span> <span class=nx>synctypeAll</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>				<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Performing requested full sync of services&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>				<span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>doSync</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>				<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>					<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error during full sync in network service controller. Error: &#34;</span> <span class=o>+</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>				<span class=p>}</span>
+</span></span><span class=line><span class=cl>			<span class=k>case</span> <span class=nx>synctypeIpvs</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>				<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Performing requested sync of ipvs services&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>				<span class=nx>nsc</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Lock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>                <span class=c1>//  ipvs 的更新/同步逻辑
+</span></span></span><span class=line><span class=cl><span class=c1></span>				<span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>syncIpvsServices</span><span class=p>(</span><span class=nx>nsc</span><span class=p>.</span><span class=nx>serviceMap</span><span class=p>,</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>endpointsMap</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>				<span class=nx>nsc</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Unlock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>				<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>					<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error during ipvs sync in network service controller. Error: &#34;</span> <span class=o>+</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>				<span class=p>}</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span>
+</span></span><span class=line><span class=cl>			<span class=k>if</span> <span class=nx>err</span> <span class=o>==</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>				<span class=nx>healthcheck</span><span class=p>.</span><span class=nf>SendHeartBeat</span><span class=p>(</span><span class=nx>healthChan</span><span class=p>,</span> <span class=s>&#34;NSC&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>		<span class=k>case</span> <span class=o>&lt;-</span><span class=nx>t</span><span class=p>.</span><span class=nx>C</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>			<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Performing periodic sync of ipvs services&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=nx>healthcheck</span><span class=p>.</span><span class=nf>SendHeartBeat</span><span class=p>(</span><span class=nx>healthChan</span><span class=p>,</span> <span class=s>&#34;NSC&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>doSync</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>			<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>				<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error during periodic ipvs sync in network service controller. Error: &#34;</span> <span class=o>+</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>				<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Skipping sending heartbeat from network service controller as periodic sync failed.&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span> <span class=k>else</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>				<span class=nx>healthcheck</span><span class=p>.</span><span class=nf>SendHeartBeat</span><span class=p>(</span><span class=nx>healthChan</span><span class=p>,</span> <span class=s>&#34;NSC&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>更新 ipvs 函数 nsc.syncIpvsServices ：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span><span class=lnt>37
+</span><span class=lnt>38
+</span><span class=lnt>39
+</span><span class=lnt>40
+</span><span class=lnt>41
+</span><span class=lnt>42
+</span><span class=lnt>43
+</span><span class=lnt>44
+</span><span class=lnt>45
+</span><span class=lnt>46
+</span><span class=lnt>47
+</span><span class=lnt>48
+</span><span class=lnt>49
+</span><span class=lnt>50
+</span><span class=lnt>51
+</span><span class=lnt>52
+</span><span class=lnt>53
+</span><span class=lnt>54
+</span><span class=lnt>55
+</span><span class=lnt>56
+</span><span class=lnt>57
+</span><span class=lnt>58
+</span><span class=lnt>59
+</span><span class=lnt>60
+</span><span class=lnt>61
+</span><span class=lnt>62
+</span><span class=lnt>63
+</span><span class=lnt>64
+</span><span class=lnt>65
+</span><span class=lnt>66
+</span><span class=lnt>67
+</span><span class=lnt>68
+</span><span class=lnt>69
+</span><span class=lnt>70
+</span><span class=lnt>71
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// proxy/service_endpoints_sync.go
+</span></span></span><span class=line><span class=cl><span class=c1>// sync the ipvs service and server details configured to reflect the desired state of Kubernetes services
+</span></span></span><span class=line><span class=cl><span class=c1>// and endpoints as learned from services and endpoints information from the api server
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>syncIpvsServices</span><span class=p>(</span><span class=nx>serviceInfoMap</span> <span class=nx>serviceInfoMap</span><span class=p>,</span> <span class=nx>endpointsInfoMap</span> <span class=nx>endpointsInfoMap</span><span class=p>)</span> <span class=kt>error</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=nx>start</span> <span class=o>:=</span> <span class=nx>time</span><span class=p>.</span><span class=nf>Now</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>	<span class=k>defer</span> <span class=kd>func</span><span class=p>()</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>endTime</span> <span class=o>:=</span> <span class=nx>time</span><span class=p>.</span><span class=nf>Since</span><span class=p>(</span><span class=nx>start</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>MetricsEnabled</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=nx>metrics</span><span class=p>.</span><span class=nx>ControllerIpvsServicesSyncTime</span><span class=p>.</span><span class=nf>Observe</span><span class=p>(</span><span class=nx>endTime</span><span class=p>.</span><span class=nf>Seconds</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;sync ipvs services took %v&#34;</span><span class=p>,</span> <span class=nx>endTime</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}()</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=kd>var</span> <span class=nx>err</span> <span class=kt>error</span>
+</span></span><span class=line><span class=cl>	<span class=kd>var</span> <span class=nx>syncErrors</span> <span class=kt>bool</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=c1>// map to track all active IPVS services and servers that are setup during sync of
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=c1>// cluster IP, nodeport and external IP services
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>activeServiceEndpointMap</span> <span class=o>:=</span> <span class=nb>make</span><span class=p>(</span><span class=kd>map</span><span class=p>[</span><span class=kt>string</span><span class=p>][]</span><span class=kt>string</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=c1>// 配置 VIP ipvs
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>setupClusterIPServices</span><span class=p>(</span><span class=nx>serviceInfoMap</span><span class=p>,</span> <span class=nx>endpointsInfoMap</span><span class=p>,</span> <span class=nx>activeServiceEndpointMap</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>syncErrors</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error setting up IPVS services for service cluster IP&#39;s: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>    
+</span></span><span class=line><span class=cl>    <span class=c1>// 配置 nodeport ipvs
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>setupNodePortServices</span><span class=p>(</span><span class=nx>serviceInfoMap</span><span class=p>,</span> <span class=nx>endpointsInfoMap</span><span class=p>,</span> <span class=nx>activeServiceEndpointMap</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>syncErrors</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error setting up IPVS services for service nodeport&#39;s: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>setupExternalIPServices</span><span class=p>(</span><span class=nx>serviceInfoMap</span><span class=p>,</span> <span class=nx>endpointsInfoMap</span><span class=p>,</span> <span class=nx>activeServiceEndpointMap</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>syncErrors</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error setting up IPVS services for service external IP&#39;s and load balancer IP&#39;s: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl> 
+</span></span><span class=line><span class=cl>    <span class=c1>// 清理过期 vip
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>cleanupStaleVIPs</span><span class=p>(</span><span class=nx>activeServiceEndpointMap</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>syncErrors</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error cleaning up stale VIP&#39;s configured on the dummy interface: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>    
+</span></span><span class=line><span class=cl>    <span class=c1>// 清理过期 RS IP
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>cleanupStaleIPVSConfig</span><span class=p>(</span><span class=nx>activeServiceEndpointMap</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>syncErrors</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error cleaning up stale IPVS services and servers: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>syncIpvsFirewall</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>syncErrors</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error syncing ipvs svc iptables rules to permit traffic to service VIP&#39;s: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>setupForDSR</span><span class=p>(</span><span class=nx>serviceInfoMap</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>syncErrors</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Error setting up necessary policy based routing configuration needed for direct server return: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>syncErrors</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;One or more errors encountered during sync of IPVS services and servers to desired state&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span> <span class=k>else</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;IPVS servers and services are synced to desired state&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=k>return</span> <span class=kc>nil</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>每次有 endpoint/service 发生变化，nsc.syncIpvsServices 都会将所有ipvs 更新一遍，整个函数执行时间根据 service 数量不同执行时间不同。在我们线下环境有 3200 个 service，函数执行时间 30s+。</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-1.png width=1702 height=310 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-1_hu75ef69922eb4787aa0fa8cbc9c3d2596_126095_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-1_hu75ef69922eb4787aa0fa8cbc9c3d2596_126095_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=549 data-flex-basis=1317px></p><p>这就解答了「为什么 ipvs 在 20s 后才会将 pod ip 摘掉」。</p><p>那上面说的设置 ipvs rs weight 来停止新连接的转发，在 kube-router 中有没有实现呢？我们在阅读源码时，发现下面这一部分代码：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// Run periodically sync ipvs configuration to reflect desired state of services and endpoints
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>Run</span><span class=p>(</span><span class=nx>healthChan</span> <span class=kd>chan</span><span class=o>&lt;-</span> <span class=o>*</span><span class=nx>healthcheck</span><span class=p>.</span><span class=nx>ControllerHeartbeat</span><span class=p>,</span> <span class=nx>stopCh</span> <span class=o>&lt;-</span><span class=kd>chan</span> <span class=kd>struct</span><span class=p>{},</span> <span class=nx>wg</span> <span class=o>*</span><span class=nx>sync</span><span class=p>.</span><span class=nx>WaitGroup</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=o>......</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=c1>// loop forever until notified to stop on stopCh
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=k>for</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>select</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>case</span> <span class=o>&lt;-</span><span class=nx>stopCh</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>			<span class=nx>nsc</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Lock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>			<span class=nx>nsc</span><span class=p>.</span><span class=nx>readyForUpdates</span> <span class=p>=</span> <span class=kc>false</span>
+</span></span><span class=line><span class=cl>			<span class=nx>nsc</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Unlock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>			<span class=nx>glog</span><span class=p>.</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Shutting down network services controller&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=k>return</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>		<span class=k>case</span> <span class=o>&lt;-</span><span class=nx>gracefulTicker</span><span class=p>.</span><span class=nx>C</span><span class=p>:</span>
+</span></span><span class=line><span class=cl>			<span class=k>if</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>readyForUpdates</span> <span class=o>&amp;&amp;</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>gracefulTermination</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>				<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>3</span><span class=p>).</span><span class=nf>Info</span><span class=p>(</span><span class=s>&#34;Performing periodic graceful destination cleanup&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>				<span class=nx>nsc</span><span class=p>.</span><span class=nf>gracefulSync</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span>
+</span></span><span class=line><span class=cl>       <span class=o>......</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>NSC 中存在一个 graceful 定时器，触发时会执行 nsc.gracefulSync 函数：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span><span class=lnt>37
+</span><span class=lnt>38
+</span><span class=lnt>39
+</span><span class=lnt>40
+</span><span class=lnt>41
+</span><span class=lnt>42
+</span><span class=lnt>43
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// proxy/network_service_graceful.go
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>gracefulSync</span><span class=p>()</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=nx>nsc</span><span class=p>.</span><span class=nx>gracefulQueue</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Lock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>	<span class=k>defer</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>gracefulQueue</span><span class=p>.</span><span class=nx>mu</span><span class=p>.</span><span class=nf>Unlock</span><span class=p>()</span>
+</span></span><span class=line><span class=cl>	<span class=kd>var</span> <span class=nx>newQueue</span> <span class=p>[]</span><span class=nx>gracefulRequest</span>
+</span></span><span class=line><span class=cl>	<span class=c1>// Itterate over our queued destination removals one by one, and don&#39;t add them back to the queue if they were processed
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=k>for</span> <span class=nx>_</span><span class=p>,</span> <span class=nx>job</span> <span class=o>:=</span> <span class=k>range</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>gracefulQueue</span><span class=p>.</span><span class=nx>queue</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>removed</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>gracefulDeleteIpvsDestination</span><span class=p>(</span><span class=nx>job</span><span class=p>);</span> <span class=nx>removed</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=k>continue</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>		<span class=nx>newQueue</span> <span class=p>=</span> <span class=nb>append</span><span class=p>(</span><span class=nx>newQueue</span><span class=p>,</span> <span class=nx>job</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=nx>nsc</span><span class=p>.</span><span class=nx>gracefulQueue</span><span class=p>.</span><span class=nx>queue</span> <span class=p>=</span> <span class=nx>newQueue</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>gracefulDeleteIpvsDestination</span><span class=p>(</span><span class=nx>req</span> <span class=nx>gracefulRequest</span><span class=p>)</span> <span class=kt>bool</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=kd>var</span> <span class=nx>deleteDestination</span> <span class=kt>bool</span>
+</span></span><span class=line><span class=cl>	<span class=c1>// Get active and inactive connections for the destination
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>aConn</span><span class=p>,</span> <span class=nx>iConn</span><span class=p>,</span> <span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>getIpvsDestinationConnStats</span><span class=p>(</span><span class=nx>req</span><span class=p>.</span><span class=nx>ipvsSvc</span><span class=p>,</span> <span class=nx>req</span><span class=p>.</span><span class=nx>ipvsDst</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>1</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Could not get connection stats for destination: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span> <span class=k>else</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=c1>// Do we have active or inactive connections to this destination
+</span></span></span><span class=line><span class=cl><span class=c1></span>		<span class=c1>// if we don&#39;t, proceed and delete the destination ahead of graceful period
+</span></span></span><span class=line><span class=cl><span class=c1></span>		<span class=k>if</span> <span class=nx>aConn</span> <span class=o>==</span> <span class=mi>0</span> <span class=o>&amp;&amp;</span> <span class=nx>iConn</span> <span class=o>==</span> <span class=mi>0</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=nx>deleteDestination</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=c1>// Check if our destinations graceful termination period has passed
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=k>if</span> <span class=nx>time</span><span class=p>.</span><span class=nf>Since</span><span class=p>(</span><span class=nx>req</span><span class=p>.</span><span class=nx>deletionTime</span><span class=p>)</span> <span class=p>&gt;</span> <span class=nx>req</span><span class=p>.</span><span class=nx>gracefulTerminationPeriod</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>deleteDestination</span> <span class=p>=</span> <span class=kc>true</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>	<span class=c1>//Destination has has one or more conditions for deletion
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=k>if</span> <span class=nx>deleteDestination</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>glog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>2</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Deleting IPVS destination: %s&#34;</span><span class=p>,</span> <span class=nf>ipvsDestinationString</span><span class=p>(</span><span class=nx>req</span><span class=p>.</span><span class=nx>ipvsDst</span><span class=p>))</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>ln</span><span class=p>.</span><span class=nf>ipvsDelDestination</span><span class=p>(</span><span class=nx>req</span><span class=p>.</span><span class=nx>ipvsSvc</span><span class=p>,</span> <span class=nx>req</span><span class=p>.</span><span class=nx>ipvsDst</span><span class=p>);</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Failed to delete IPVS destination: %s, %s&#34;</span><span class=p>,</span> <span class=nf>ipvsDestinationString</span><span class=p>(</span><span class=nx>req</span><span class=p>.</span><span class=nx>ipvsDst</span><span class=p>),</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=k>return</span> <span class=nx>deleteDestination</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>nsc.gracefulSync 函数主要逻辑是对 ipvs 中 RS 进行删除，判断逻辑如下：</p><ol><li>InActConn 和 ActConn 都为0，则说明没有连接存在，可以直接删除；</li><li>如果 InActConn 或 ActConn 不为零，但是 pod 删除等待时长已经超过 pod.gracefulTerminationPeriod，则可以直接删除；</li><li>否则，等待下一次进行；</li></ol><p>那 nsc.gracefulQueue 队列是在哪里写入的呢？我们之间检索 gracefulQueue 字段，发现在函数 nsc.ipvsDeleteDestination 中写入</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// proxy/network_service_graceful.go
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>nsc</span> <span class=o>*</span><span class=nx>NetworkServicesController</span><span class=p>)</span> <span class=nf>ipvsDeleteDestination</span><span class=p>(</span><span class=nx>svc</span> <span class=o>*</span><span class=nx>ipvs</span><span class=p>.</span><span class=nx>Service</span><span class=p>,</span> <span class=nx>dst</span> <span class=o>*</span><span class=nx>ipvs</span><span class=p>.</span><span class=nx>Destination</span><span class=p>)</span> <span class=kt>error</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=c1>// If we have enabled graceful termination set the weight of the destination to 0
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=c1>// then add it to the queue for graceful termination
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=k>if</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>gracefulTermination</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>req</span> <span class=o>:=</span> <span class=nx>gracefulRequest</span><span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=nx>ipvsSvc</span><span class=p>:</span>      <span class=nx>svc</span><span class=p>,</span>
+</span></span><span class=line><span class=cl>			<span class=nx>ipvsDst</span><span class=p>:</span>      <span class=nx>dst</span><span class=p>,</span>
+</span></span><span class=line><span class=cl>			<span class=nx>deletionTime</span><span class=p>:</span> <span class=nx>time</span><span class=p>.</span><span class=nf>Now</span><span class=p>(),</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>		<span class=nx>dst</span><span class=p>.</span><span class=nx>Weight</span> <span class=p>=</span> <span class=mi>0</span>
+</span></span><span class=line><span class=cl>		<span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>ln</span><span class=p>.</span><span class=nf>ipvsUpdateDestination</span><span class=p>(</span><span class=nx>svc</span><span class=p>,</span> <span class=nx>dst</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=k>return</span> <span class=nx>err</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>		<span class=nx>nsc</span><span class=p>.</span><span class=nf>addToGracefulQueue</span><span class=p>(</span><span class=o>&amp;</span><span class=nx>req</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span> <span class=k>else</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nx>ln</span><span class=p>.</span><span class=nf>ipvsDelDestination</span><span class=p>(</span><span class=nx>svc</span><span class=p>,</span> <span class=nx>dst</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=k>return</span> <span class=nx>err</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=c1>// flush conntrack when Destination for a UDP service changes
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=k>if</span> <span class=nx>svc</span><span class=p>.</span><span class=nx>Protocol</span> <span class=o>==</span> <span class=nx>syscall</span><span class=p>.</span><span class=nx>IPPROTO_UDP</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>err</span> <span class=o>:=</span> <span class=nx>nsc</span><span class=p>.</span><span class=nf>flushConntrackUDP</span><span class=p>(</span><span class=nx>svc</span><span class=p>);</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=nx>glog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Failed to flush conntrack: %s&#34;</span><span class=p>,</span> <span class=nx>err</span><span class=p>.</span><span class=nf>Error</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=k>return</span> <span class=kc>nil</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>nsc.ipvsDeleteDestination 判断 nsc.gracefulTermination 如果开启，则不会立即删除。而是，执行下面操作：</p><ol><li>更新 ipvs 配置，设置 RS weight=0；</li><li>加入 gracefulQueue 队列中，等待删除；</li></ol><p>综上，可以看出 nsc.gracefulTermination 就是开启 ipvs 优雅下线的开关，而这个是通过参数 &ndash;ipvs-graceful-termination 来控制的。然后，我们开启 ipvs-graceful-termination 进行测试。</p><p>我们对测试应用 http-server 增加优雅下线逻辑：</p><ol><li>捕获 SIGTERM 信号；</li><li>捕获到 SIGTERM 信号后，在 http header 中增加 connection: close，也就是在容器下线阶段使用短连接；</li></ol><p>然后再进行压测：</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-2.png width=1292 height=268 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-2_huec4fcb175f5e4b7b09a7b4a71753eab1_45331_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-2_huec4fcb175f5e4b7b09a7b4a71753eab1_45331_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=482 data-flex-basis=1157px>=><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-3.png width=1226 height=264 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-3_huf8ff7332f7cc874067aff7007b44a966_44339_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-3_huf8ff7332f7cc874067aff7007b44a966_44339_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=464 data-flex-basis=1114px>=></p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-4.png width=1308 height=302 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-4_hu0b5e6863c3abf54c0fc11e53505bae57_52474_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-code-4_hu0b5e6863c3abf54c0fc11e53505bae57_52474_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=433 data-flex-basis=1039px>=><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-5.png width=1220 height=276 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-5_hu90736c2107b468ee73db65a46390bca4_45281_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-5_hu90736c2107b468ee73db65a46390bca4_45281_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=442 data-flex-basis=1060px></p><p>上面分别对应，销毁 Pod 前、销毁 Pod 过程中1、销毁 Pod 过程中2、Pod 被完全销毁。</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-6.png width=1562 height=540 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-6_hueab1f30dd25b8e0e6c2b2c81a5d9578a_59479_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kuberouter-6_hueab1f30dd25b8e0e6c2b2c81a5d9578a_59479_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=289 data-flex-basis=694px></p><p>通过开启 ipvs graceful terminated，并且容器销毁后应用捕获 SIGTERM 信号进行连接的优雅下线，测试中未出现请求错误的问题。</p><h4 id=总结>总结</h4><p>对以上源码研究，进行总结如下：</p><ol><li>kube-router 每次更新都是全量更新，service 数量不同 ipvs RS 新增、更新、删除的延迟不同；</li><li>具有优雅删除 RS 的能力，并且结合了 Pod terminatedGracefulPeriod 进行 RS 的完全删除；</li><li>为开启 &ndash;ipvs-graceful-termination，会立即删除 RS，但是由于全量更新的延迟，表现上是有一定延迟（线下 30s+、线上15s+）；</li></ol><h3 id=kube-proxy-实现逻辑>kube-proxy 实现逻辑</h3><p>根据 1.22 版本 kube-proxy 代码，pod 删除过程：</p><p><img src=/blog/p/how-endpoint-flush-ipvs/img/endpoint-kubeproxy.png width=1546 height=546 srcset="/blog/p/how-endpoint-flush-ipvs/img/endpoint-kubeproxy_hu3ea3e324c9b08ff7ed3ccd6963a40b39_169168_480x0_resize_box_3.png 480w, /blog/p/how-endpoint-flush-ipvs/img/endpoint-kubeproxy_hu3ea3e324c9b08ff7ed3ccd6963a40b39_169168_1024x0_resize_box_3.png 1024w" loading=lazy class=gallery-image data-flex-grow=283 data-flex-basis=679px></p><ol><li>销毁 Pod，Endpoint 中移除销毁中的 Pod IP；</li><li>kube-proxy watch 到 endpoint 发生变化，进入 ipvs 删除判断逻辑：<ol><li>协议不是 UDP 或 SFTP；</li><li>ActConn 和 InActConn 都为0；</li></ol></li><li>不满足删除判断，则更新 ipvs 中 RS weight=0;</li><li>然后，将 RS 加入到本地队列，每隔 1min 进行删除判断；</li></ol><h4 id=源码>源码</h4><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span><span class=lnt>37
+</span><span class=lnt>38
+</span><span class=lnt>39
+</span><span class=lnt>40
+</span><span class=lnt>41
+</span><span class=lnt>42
+</span><span class=lnt>43
+</span><span class=lnt>44
+</span><span class=lnt>45
+</span><span class=lnt>46
+</span><span class=lnt>47
+</span><span class=lnt>48
+</span><span class=lnt>49
+</span><span class=lnt>50
+</span><span class=lnt>51
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// proxy/ipvs/graceful_termination.go
+</span></span></span><span class=line><span class=cl><span class=c1></span>
+</span></span><span class=line><span class=cl><span class=c1>// GracefulDeleteRS to update rs weight to 0, and add rs to graceful terminate list
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>m</span> <span class=o>*</span><span class=nx>GracefulTerminationManager</span><span class=p>)</span> <span class=nf>GracefulDeleteRS</span><span class=p>(</span><span class=nx>vs</span> <span class=o>*</span><span class=nx>utilipvs</span><span class=p>.</span><span class=nx>VirtualServer</span><span class=p>,</span> <span class=nx>rs</span> <span class=o>*</span><span class=nx>utilipvs</span><span class=p>.</span><span class=nx>RealServer</span><span class=p>)</span> <span class=kt>error</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=c1>// Try to delete rs before add it to graceful delete list
+</span></span></span><span class=line><span class=cl><span class=c1></span>	<span class=nx>ele</span> <span class=o>:=</span> <span class=o>&amp;</span><span class=nx>listItem</span><span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>VirtualServer</span><span class=p>:</span> <span class=nx>vs</span><span class=p>,</span>
+</span></span><span class=line><span class=cl>		<span class=nx>RealServer</span><span class=p>:</span>    <span class=nx>rs</span><span class=p>,</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=nx>deleted</span><span class=p>,</span> <span class=nx>err</span> <span class=o>:=</span> <span class=nx>m</span><span class=p>.</span><span class=nf>deleteRsFunc</span><span class=p>(</span><span class=nx>ele</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>klog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Delete rs %q err: %v&#34;</span><span class=p>,</span> <span class=nx>ele</span><span class=p>.</span><span class=nf>String</span><span class=p>(),</span> <span class=nx>err</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>deleted</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>return</span> <span class=kc>nil</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=nx>rs</span><span class=p>.</span><span class=nx>Weight</span> <span class=p>=</span> <span class=mi>0</span>
+</span></span><span class=line><span class=cl>	<span class=nx>err</span> <span class=p>=</span> <span class=nx>m</span><span class=p>.</span><span class=nx>ipvs</span><span class=p>.</span><span class=nf>UpdateRealServer</span><span class=p>(</span><span class=nx>vs</span><span class=p>,</span> <span class=nx>rs</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>return</span> <span class=nx>err</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=nx>klog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>5</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Adding an element to graceful delete rsList: %+v&#34;</span><span class=p>,</span> <span class=nx>ele</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=nx>m</span><span class=p>.</span><span class=nx>rsList</span><span class=p>.</span><span class=nf>add</span><span class=p>(</span><span class=nx>ele</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>return</span> <span class=kc>nil</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl><span class=kd>func</span> <span class=p>(</span><span class=nx>m</span> <span class=o>*</span><span class=nx>GracefulTerminationManager</span><span class=p>)</span> <span class=nf>deleteRsFunc</span><span class=p>(</span><span class=nx>rsToDelete</span> <span class=o>*</span><span class=nx>listItem</span><span class=p>)</span> <span class=p>(</span><span class=kt>bool</span><span class=p>,</span> <span class=kt>error</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=nx>klog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>5</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Trying to delete rs: %s&#34;</span><span class=p>,</span> <span class=nx>rsToDelete</span><span class=p>.</span><span class=nf>String</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>	<span class=nx>rss</span><span class=p>,</span> <span class=nx>err</span> <span class=o>:=</span> <span class=nx>m</span><span class=p>.</span><span class=nx>ipvs</span><span class=p>.</span><span class=nf>GetRealServers</span><span class=p>(</span><span class=nx>rsToDelete</span><span class=p>.</span><span class=nx>VirtualServer</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>return</span> <span class=kc>false</span><span class=p>,</span> <span class=nx>err</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=k>for</span> <span class=nx>_</span><span class=p>,</span> <span class=nx>rs</span> <span class=o>:=</span> <span class=k>range</span> <span class=nx>rss</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=k>if</span> <span class=nx>rsToDelete</span><span class=p>.</span><span class=nx>RealServer</span><span class=p>.</span><span class=nf>Equal</span><span class=p>(</span><span class=nx>rs</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>			<span class=c1>// For UDP and SCTP traffic, no graceful termination, we immediately delete the RS
+</span></span></span><span class=line><span class=cl><span class=c1></span>			<span class=c1>//     (existing connections will be deleted on the next packet because sysctlExpireNoDestConn=1)
+</span></span></span><span class=line><span class=cl><span class=c1></span>			<span class=c1>// For other protocols, don&#39;t delete until all connections have expired)
+</span></span></span><span class=line><span class=cl><span class=c1></span>			<span class=k>if</span> <span class=nx>utilipvs</span><span class=p>.</span><span class=nf>IsRsGracefulTerminationNeeded</span><span class=p>(</span><span class=nx>rsToDelete</span><span class=p>.</span><span class=nx>VirtualServer</span><span class=p>.</span><span class=nx>Protocol</span><span class=p>)</span> <span class=o>&amp;&amp;</span> <span class=nx>rs</span><span class=p>.</span><span class=nx>ActiveConn</span><span class=o>+</span><span class=nx>rs</span><span class=p>.</span><span class=nx>InactiveConn</span> <span class=o>!=</span> <span class=mi>0</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>				<span class=nx>klog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>5</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Not deleting, RS %v: %v ActiveConn, %v InactiveConn&#34;</span><span class=p>,</span> <span class=nx>rsToDelete</span><span class=p>.</span><span class=nf>String</span><span class=p>(),</span> <span class=nx>rs</span><span class=p>.</span><span class=nx>ActiveConn</span><span class=p>,</span> <span class=nx>rs</span><span class=p>.</span><span class=nx>InactiveConn</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>				<span class=k>return</span> <span class=kc>false</span><span class=p>,</span> <span class=kc>nil</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span>
+</span></span><span class=line><span class=cl>			<span class=nx>klog</span><span class=p>.</span><span class=nf>V</span><span class=p>(</span><span class=mi>5</span><span class=p>).</span><span class=nf>Infof</span><span class=p>(</span><span class=s>&#34;Deleting rs: %s&#34;</span><span class=p>,</span> <span class=nx>rsToDelete</span><span class=p>.</span><span class=nf>String</span><span class=p>())</span>
+</span></span><span class=line><span class=cl>			<span class=nx>err</span> <span class=o>:=</span> <span class=nx>m</span><span class=p>.</span><span class=nx>ipvs</span><span class=p>.</span><span class=nf>DeleteRealServer</span><span class=p>(</span><span class=nx>rsToDelete</span><span class=p>.</span><span class=nx>VirtualServer</span><span class=p>,</span> <span class=nx>rs</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=k>if</span> <span class=nx>err</span> <span class=o>!=</span> <span class=kc>nil</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>				<span class=k>return</span> <span class=kc>false</span><span class=p>,</span> <span class=nx>fmt</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Delete destination %q err: %v&#34;</span><span class=p>,</span> <span class=nx>rs</span><span class=p>.</span><span class=nf>String</span><span class=p>(),</span> <span class=nx>err</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>			<span class=p>}</span>
+</span></span><span class=line><span class=cl>			<span class=k>return</span> <span class=kc>true</span><span class=p>,</span> <span class=kc>nil</span>
+</span></span><span class=line><span class=cl>		<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl>	<span class=k>return</span> <span class=kc>true</span><span class=p>,</span> <span class=nx>fmt</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Failed to delete rs %q, can&#39;t find the real server&#34;</span><span class=p>,</span> <span class=nx>rsToDelete</span><span class=p>.</span><span class=nf>String</span><span class=p>())</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><p>kube-proxy GracefulDeleteRS 函数会 deleteRsFunc 进行 RS 删除，删除 RS 条件：</p><ol><li>协议不是 UDP 或 SFTP；</li><li>ActConn 和 InActConn 都为0；</li></ol><p>否则，更新 ipvs 将 RS weight 置为 0，不接收新流量进入。然后会加入到带删除列表中，进行定期（间隔1min）清理：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=kd>func</span> <span class=p>(</span><span class=nx>m</span> <span class=o>*</span><span class=nx>GracefulTerminationManager</span><span class=p>)</span> <span class=nf>tryDeleteRs</span><span class=p>()</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=k>if</span> <span class=p>!</span><span class=nx>m</span><span class=p>.</span><span class=nx>rsList</span><span class=p>.</span><span class=nf>flushList</span><span class=p>(</span><span class=nx>m</span><span class=p>.</span><span class=nx>deleteRsFunc</span><span class=p>)</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>		<span class=nx>klog</span><span class=p>.</span><span class=nf>Errorf</span><span class=p>(</span><span class=s>&#34;Try flush graceful termination list err&#34;</span><span class=p>)</span>
+</span></span><span class=line><span class=cl>	<span class=p>}</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl><span class=c1>// Run start a goroutine to try to delete rs in the graceful delete rsList with an interval 1 minute
+</span></span></span><span class=line><span class=cl><span class=c1></span><span class=kd>func</span> <span class=p>(</span><span class=nx>m</span> <span class=o>*</span><span class=nx>GracefulTerminationManager</span><span class=p>)</span> <span class=nf>Run</span><span class=p>()</span> <span class=p>{</span>
+</span></span><span class=line><span class=cl>	<span class=k>go</span> <span class=nx>wait</span><span class=p>.</span><span class=nf>Until</span><span class=p>(</span><span class=nx>m</span><span class=p>.</span><span class=nx>tryDeleteRs</span><span class=p>,</span> <span class=nx>rsCheckDeleteInterval</span><span class=p>,</span> <span class=nx>wait</span><span class=p>.</span><span class=nx>NeverStop</span><span class=p>)</span>
+</span></span><span class=line><span class=cl><span class=p>}</span>
+</span></span></code></pre></td></tr></table></div></div><h2 id=优化方案>优化方案</h2><div class=table-wrapper><table><thead><tr><th style=text-align:left></th><th style=text-align:left></th><th style=text-align:left>优点</th><th style=text-align:left>缺点</th></tr></thead><tbody><tr><td style=text-align:left>方案一</td><td style=text-align:left>kube-router 开启 &ndash;ipvs-graceful-termination 参数</td><td style=text-align:left></td><td style=text-align:left></td></tr><tr><td style=text-align:left>方案二</td><td style=text-align:left>开发内网负载均衡组件</td><td style=text-align:left></td><td style=text-align:left></td></tr></tbody></table></div><h2 id=参考>参考</h2><ol><li><a class=link href=http://www.dockone.io/article/9441 target=_blank rel=noopener>http://www.dockone.io/article/9441</a></li><li><a class=link href=https://wsgzao.github.io/post/lvs-nat/ target=_blank rel=noopener>https://wsgzao.github.io/post/lvs-nat/</a></li><li><a class=link href=https://github.com/cloudnativelabs/kube-router/pull/706 target=_blank rel=noopener>Issue 572 - Graceful termination</a></li><li><a class=link href=https://github.com/kubernetes/kubernetes/pull/66012 target=_blank rel=noopener>kube-proxy ipvs support graceful termination</a></li></ol></section><footer class=article-footer><section class=article-copyright><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="12" r="9"/><path d="M14.5 9a3.5 4 0 100 6"/></svg><span>Licensed under CC BY-NC-SA 4.0</span></section></footer></article><aside class=related-content--wrapper><h2 class=section-title>相关文章</h2><div class=related-content><div class="flex article-list--tile"><article class=has-image><a href=/blog/p/service-cause-failure/><div class=article-image><img src=/blog/p/service-cause-failure/_hu0a3f1163de68d0b9471979ebf0ecf11e_32400_a354a9a1f5102742bceb4ec236f4ce2f.jpg width=250 height=150 loading=lazy alt="Featured image of post 云上 pod 下线引起短时服务不可用" data-key=service-cause-failure data-hash="md5-rC+UhC7sa7h6Y66uIugvQQ=="></div><div class=article-details><h2 class=article-title>云上 pod 下线引起短时服务不可用</h2></div></a></article><article class=has-image><a href=/blog/p/kubectl-exec-deepin/><div class=article-image><img src=/blog/p/kubectl-exec-deepin/_hu45a5e3ad5e058da6a00650ed8fd40bea_15530_27040ddd7399aaf289c0ce70ee6592d9.jpg width=250 height=150 loading=lazy alt="Featured image of post 从 kubectl exec 异常问题开始" data-key=kubectl-exec-deepin data-hash="md5-RvYejqai34/Fvx0koXxEpg=="></div><div class=article-details><h2 class=article-title>从 kubectl exec 异常问题开始</h2></div></a></article></div></div></aside><div class=disqus-container><div id=disqus_thread></div><script type=application/javascript>window.disqus_config=function(){},function(){if(["localhost","127.0.0.1"].indexOf(window.location.hostname)!=-1){document.getElementById("disqus_thread").innerHTML="Disqus comments not available by default when the website is previewed locally.";return}var t=document,e=t.createElement("script");e.async=!0,e.src="//hugo-theme-stack.disqus.com/embed.js",e.setAttribute("data-timestamp",+new Date),(t.head||t.body).appendChild(e)}()</script><noscript>Please enable JavaScript to view the <a href=https://disqus.com/?ref_noscript>comments powered by Disqus.</a></noscript><a href=https://disqus.com class=dsq-brlink>comments powered by <span class=logo-disqus>Disqus</span></a></div><style>.disqus-container{background-color:var(--card-background);border-radius:var(--card-border-radius);box-shadow:var(--shadow-l1);padding:var(--card-padding)}</style><script>window.addEventListener("onColorSchemeChange",e=>{typeof DISQUS=="object"&&DISQUS.reset({reload:!0})})</script><footer class=site-footer><section class=copyright>&copy;
+2020 -
+2023 jason's 博客</section><section class=powerby>Built with <a href=https://gohugo.io/ target=_blank rel=noopener>Hugo</a><br>主题 <b><a href=https://github.com/CaiJimmy/hugo-theme-stack target=_blank rel=noopener data-version=3.16.0>Stack</a></b> 由 <a href=https://jimmycai.com target=_blank rel=noopener>Jimmy</a> 设计</section></footer><div class=pswp tabindex=-1 role=dialog aria-hidden=true><div class=pswp__bg></div><div class=pswp__scroll-wrap><div class=pswp__container><div class=pswp__item></div><div class=pswp__item></div><div class=pswp__item></div></div><div class="pswp__ui pswp__ui--hidden"><div class=pswp__top-bar><div class=pswp__counter></div><button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+<button class="pswp__button pswp__button--share" title=Share></button>
+<button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+<button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button><div class=pswp__preloader><div class=pswp__preloader__icn><div class=pswp__preloader__cut><div class=pswp__preloader__donut></div></div></div></div></div><div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap"><div class=pswp__share-tooltip></div></div><button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)"></button>
+<button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)"></button><div class=pswp__caption><div class=pswp__caption__center></div></div></div></div></div><script src=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo=" crossorigin=anonymous defer></script><script src=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU=" crossorigin=anonymous defer></script><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css crossorigin=anonymous><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css crossorigin=anonymous></main></div><script src=https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z+KMkF24hUW8WePSA9HM=" crossorigin=anonymous></script><script type=text/javascript src=/blog/ts/main.js defer></script>
+<script>(function(){const e=document.createElement("link");e.href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap",e.type="text/css",e.rel="stylesheet",document.head.appendChild(e)})()</script></body></html>
