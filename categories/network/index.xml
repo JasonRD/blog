@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>network on jason's 博客</title><link>https://jasonrd.github.io/blog/categories/network/</link><description>Recent content in network on jason's 博客</description><generator>Hugo -- gohugo.io</generator><language>en</language><lastBuildDate>Mon, 01 Nov 2021 00:00:00 +0000</lastBuildDate><atom:link href="https://jasonrd.github.io/blog/categories/network/index.xml" rel="self" type="application/rss+xml"/><item><title>云上 pod 下线引起短时服务不可用</title><link>https://jasonrd.github.io/blog/p/service-cause-failure/</link><pubDate>Mon, 01 Nov 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/service-cause-failure/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/service-cause-failure/luca-bravo-alS7ewQ41M8-unsplash.jpg" alt="Featured image of post 云上 pod 下线引起短时服务不可用" />&lt;h1 id="1-背景">1. 背景&lt;/h1>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>network on jason's 博客</title><link>https://jasonrd.github.io/blog/categories/network/</link><description>Recent content in network on jason's 博客</description><generator>Hugo -- gohugo.io</generator><language>en</language><lastBuildDate>Mon, 01 Nov 2021 00:00:00 +0000</lastBuildDate><atom:link href="https://jasonrd.github.io/blog/categories/network/index.xml" rel="self" type="application/rss+xml"/><item><title>云上 pod 下线引起短时服务不可用</title><link>https://jasonrd.github.io/blog/p/service-cause-failure/</link><pubDate>Mon, 01 Nov 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/service-cause-failure/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/service-cause-failure/luca-bravo-alS7ewQ41M8-unsplash.jpg" alt="Featured image of post 云上 pod 下线引起短时服务不可用" />&lt;h2 id="1-背景">1. 背景&lt;/h2>
 &lt;p>近日，接连收到多个云上站点业务出现 502 问题反馈：&lt;/p>
 &lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/service-cause-failure/img/502-error-1.png"
 width="2980"
@@ -20,7 +20,7 @@ data-flex-grow="169"
 data-flex-basis="406px"
 >&lt;/p>
 &lt;p>和业务负责人沟通后，应用确认加入了优雅下线逻辑。&lt;/p>
-&lt;h1 id="2-排查过程">2. 排查过程&lt;/h1>
+&lt;h2 id="2-排查过程">2. 排查过程&lt;/h2>
 &lt;p>首先，查看网关日志：&lt;/p>
 &lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/service-cause-failure/img/troubleshoot-1.png"
 width="2848"
@@ -122,7 +122,7 @@ data-flex-grow="223"
 data-flex-basis="537px"
 >&lt;/p>
 &lt;p>另外，我们测试应用只有单个实例，也就是实例被删除后，lb 后端实例为 0，请求 lb 的新连接无法建立。所以，测试脚本会出现 connect refused 报错。&lt;/p>
-&lt;h1 id="3-解决方法">3. 解决方法&lt;/h1>
+&lt;h2 id="3-解决方法">3. 解决方法&lt;/h2>
 &lt;p>综上可知，问题原因是 kill pod 后仍然会有流量进入到 terminating 状态的 pod，然后 15s 后 prestop 脚本通知进程进行下线逻辑（也就是 ok 页面返回 halting 和 503 状态码），当网关继续请求到该 pod 就会认为 lb 出现异常，将唯一的 lb 标记为不健康，从而出现 502 异常。&lt;/p>
 &lt;p>其他站点未出现该问题原因是：网关直接转发到 pod ip，摘掉的是出现异常的 pod ip 。而有问题的站点对接的只是一个公有云 LB ip。&lt;/p>
 &lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/service-cause-failure/img/solution-1.png"
