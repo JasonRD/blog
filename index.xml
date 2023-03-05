@@ -156,6 +156,496 @@ data-flex-basis="361px"
 &lt;/ol>
 &lt;/li>
 &lt;li>后续 apisever 和 runtime 通道建立完成，client 就可以在 terminal 上执行命令了。&lt;/li>
+&lt;/ol></description></item><item><title>k8s 环境中 ipvs 带来的问题</title><link>https://jasonrd.github.io/blog/p/ipvs-caused-problem/</link><pubDate>Wed, 05 Jan 2022 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/ipvs-caused-problem/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/ipvs-caused-problem/matt-le-SJSpo9hQf7s-unsplash.jpg" alt="Featured image of post k8s 环境中 ipvs 带来的问题" />&lt;h2 id="背景">背景&lt;/h2>
+&lt;p>近日，收到业务同学反馈，在进行在线推理业务时发现：部署到 Kubernetes 的服务，压测试性能出现数量级下降问题（只能达到 200 QPS），业务性能将难以满足客户实际需求。&lt;/p>
+&lt;p>&lt;!-- raw HTML omitted -->&lt;!-- raw HTML omitted -->&lt;/p>
+&lt;p>我们对该问题进行了详细分析，通过对内核参数优化，最终容器环境性能可以达到 2000 QPS。&lt;/p>
+&lt;p>下面，我们将会分享整个问题分析和优化的过程，并且对其中涉及到的部分关键性问题进行剖析。另外，为何 kubernetes 优化后最高达到 2000 qps，而 docker run 环境能够达到 4000 qps？下文中也会给出答案。&lt;/p>
+&lt;h2 id="分析过程">分析过程&lt;/h2>
+&lt;p>根据业务同学反馈，压测端（10.58.14.13）使用 kubernetes service 和 nodeport 两种方式，都会出现 QPS 急剧降低的问题。&lt;/p>
+&lt;p>观察 QPS 降低为 200 时 ab 压测输出结果，可以看出 rt 大部分消耗在 connect 阶段（最大达到1s），也就是压测机（10.58.14.13）和 10.58.14.15 上的 Kubernetes 容器建立连接的过程：&lt;/p>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-1.png"
+width="1026"
+height="526"
+srcset="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-1_hua09781a0f876d3e05b8d14a9bbb027ac_301023_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-1_hua09781a0f876d3e05b8d14a9bbb027ac_301023_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="195"
+data-flex-basis="468px"
+>&lt;/p>
+&lt;p>出现这种现象，可以从下面两个方面进行分析：&lt;/p>
+&lt;ol>
+&lt;li>14.13 -&amp;gt; 14.15 之间网络存在问题；&lt;/li>
+&lt;li>14.15 系统层面问题；&lt;/li>
+&lt;/ol>
+&lt;p>为了排除网络方面的问题，我们在 14.15 主机上使用 Pod IP 进行压测，压测 QPS 为 2000 左右。然后，同样在 14.15 主机上使用 service ip 进行压测，我们发现在大约 30000 请求后，和之前业务同学描述一致：QPS 由 2000 降低到不到 120。压测时观察系统负载和业务容器 cpu 都非常低，这说明问题和 Kubernetes 网络架构有关。先看一下使用 Kubernetes service 请求和 Pod ip 两种方式有哪些不同：&lt;/p>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-2.png"
+width="880"
+height="316"
+srcset="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-2_hu75f0acaa5e34183215e50bea0bf5348b_87843_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-2_hu75f0acaa5e34183215e50bea0bf5348b_87843_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="278"
+data-flex-basis="668px"
+>&lt;/p>
+&lt;p>Service ip 是 Kubernetes 在 IP 池中选取的一个 VIP，每个 VIP 会关联多个 POD 实例。为了能够通过 VIP 请求到具体的容器，Kubernetes 网络插件会在每个节点上做一些处理，目前常用的两种模式是 iptables 或 ipvs。我们本次出问题场景使用的是 ipvs 模式。在 ipvs 模式下，当客户端使用 VIP 请求时，会经过内核 ipvs 模块进行数据处理，才将流量转发到具体的容器实例。&lt;/p>
+&lt;p>通过对比发现，我们本次出现问题应该就是 ipvs 模块上。&lt;/p>
+&lt;p>为了方便排查问题，我们在 Kubernetes 中部署了一个简单的 http server Pod，然后在 Pod 所在主机上进行压测来进行问题分析。&lt;/p>
+&lt;p>在 linux 系统中有很多工具可以方便我们来查看 ipvs 管理的连接，在压测过程中使用 ipvsadm 观察看到 vip 关联的 rs 后端连接数的变化：&lt;/p>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-3.png"
+width="3058"
+height="1260"
+srcset="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-3_huc84b6d47cb01a67fddf9dc8103a4ec0c_1927321_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-3_huc84b6d47cb01a67fddf9dc8103a4ec0c_1927321_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="242"
+data-flex-basis="582px"
+>&lt;/p>
+&lt;p>这里简单介绍执行 ipvsadm - L -t vip:port 返回的信息中几个字段的含义：&lt;/p>
+&lt;ol>
+&lt;li>Weight 流量转发给某个后端实例所占的权重，当该值为 0 时新连接就不会转发到对应的后端 ip 上；&lt;/li>
+&lt;li>ActionConn 是活动连接数，也就是tcp连接状态的 ESTABLISHED；&lt;/li>
+&lt;li>InActConn 是指除了ESTABLISHED以外的,所有的其它状态的tcp连接；&lt;/li>
+&lt;/ol>
+&lt;p>我们在压测开始 server cpu 利用能够跑满，随着 InActConn 数量的增长 server 的 cpu 利用率也开始下滑，最后当 InActConn 维持到 32000 多时，http server 的 cpu 利用率只有 3%，InActConn 数数字几乎没有变化。显然，大部分请求没有到应用层。&lt;/p>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-4.png"
+width="2182"
+height="1778"
+srcset="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-4_hud9f2fb6970bb36d62dcb40deb5656e8d_1387653_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-4_hud9f2fb6970bb36d62dcb40deb5656e8d_1387653_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="122"
+data-flex-basis="294px"
+>&lt;/p>
+&lt;p>之前在 Kubernetes 社区看到过一个关于 ipvs issue &lt;a class="link" href="https://github.com/kubernetes/kubernetes/issues/81775" target="_blank" rel="noopener"
+>#81775&lt;/a>，主要是讲一个单个客户端向某个 vip 发送请求时，容器销毁过程中会出现大量的请求错误。其中提到了一个关于 ipvs 内核参数 net.ipv4.vs.conn_reuse_mode，该参数用来开启对 ipvs connect 端口重用：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">conn_reuse_mode - INTEGER
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> 1 - default
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Controls how ipvs will deal with connections that are detected
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> port reuse. It is a bitmap, with the values being:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> 0: disable any special handling on port reuse. The new
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> connection will be delivered to the same real server that was
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> servicing the previous connection. This will effectively
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> disable expire_nodest_conn.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> bit 1: enable rescheduling of new connections when it is safe.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> That is, whenever expire_nodest_conn and for TCP sockets, when
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> the connection is in TIME_WAIT state (which is only possible if
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> you use NAT mode).
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> bit 2: it is bit 1 plus, for TCP connections, when connections
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> are in FIN_WAIT state, as this is the last state seen by load
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> balancer in Direct Routing mode. This bit helps on adding new
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> real servers to a very busy cluster.
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;ul>
+&lt;li>net.ipv4.vs.conn_reuse_mode=0时，ipvs不会对新连接进行重新负载，而是复用之前的负载结果，将新连接转发到原来的rs上；&lt;/li>
+&lt;li>net.ipv4.vs.conn_reuse_mode=1时，ipvs则会对新连接进行重新调度。&lt;/li>
+&lt;/ul>
+&lt;p>查看压测的节点内核参数，发现 net.ipv4.vs.conn_reuse_mode 值为 1。然后，我们修改内核参数： net.ipv4.vs.conn_reuse_mode=0，再进行压测，QPS 稳定到了 2000 左右。说明问题就是和 ipvs 这个参数有关。&lt;/p>
+&lt;p>相关的，还有一个内核参数&lt;code>net.ipv4.vs.expire_nodest_conn&lt;/code>，用于控制连接的rs不可用时的处理。在开启时，如果后端rs不可用，会立即结束掉该连接，使客户端重新发起新的连接请求；否则将数据包&lt;strong>silently drop&lt;/strong>，也就是DROP掉数据包但不结束连接，等待客户端的重试。内核中关于&lt;strong>destination 不可用&lt;/strong>的判断，是在ipvs执行删除&lt;code>vs&lt;/code>（在&lt;code>__ip_vs_del_service()&lt;/code>中实现）或删除&lt;code>rs&lt;/code>（在&lt;code>ip_vs_del_dest()&lt;/code>中实现）时，会调用&lt;code>__ip_vs_unlink_dest()&lt;/code>方法，将相应的destination置为不可用。&lt;/p>
+&lt;h2 id="进一步深挖">进一步深挖&lt;/h2>
+&lt;p>虽然，修改内核后 QPS 由 120+ 提升到 2000 已经满足业务方的要求。但是还有一些疑惑没有解决：&lt;/p>
+&lt;ol>
+&lt;li>为什么内核参数设置为 net.ipv4.vs.conn_reuse_mode=1 时，导致 QPS 降低到了 200？&lt;/li>
+&lt;li>内核参数修改为 net.ipv4.vs.conn_reuse_mode=0 时，会导致哪些问题？&lt;/li>
+&lt;li>为什么 docker run 运行的容器 QPS 能达到 4000 ？&lt;/li>
+&lt;/ol>
+&lt;p>带着这些疑惑，我们做进一步研究。&lt;/p>
+&lt;h3 id="netipv4vsconn_reuse_mode-开启和关闭影响">net.ipv4.vs.conn_reuse_mode 开启和关闭影响&lt;/h3>
+&lt;p>ipvs 会将请求 vs 的请求转发到 rs 需要使用 conntrack 表记录每一个连接的四元组信息。在我们压测过程中也可以看到每一条连接都会对应一条记录：&lt;/p>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-5.png"
+width="2878"
+height="320"
+srcset="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-5_hu9d9917c040d32514e300702a2d20da9f_155101_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-5_hu9d9917c040d32514e300702a2d20da9f_155101_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="img"
+class="gallery-image"
+data-flex-grow="899"
+data-flex-basis="2158px"
+>&lt;/p>
+&lt;p>第一个问题，社区 2018 年在 &lt;a class="link" href="https://github.com/kubernetes/kubernetes/issues/70747" target="_blank" rel="noopener"
+>#70747&lt;/a> issue 中进行了讨论和修复。其中 comment 中有提到一个 &lt;a class="link" href="https://marc.info/?l=linux-virtual-server&amp;amp;m=151706660530133&amp;amp;w=2" target="_blank" rel="noopener"
+>linux kernel 的讨论&lt;/a>。在未开启端口复用时，如果匹配到新请求四元组已经存在于 conntrack 表中，会直接将包丢弃（NF_DROP）：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;span class="lnt">35
+&lt;/span>&lt;span class="lnt">36
+&lt;/span>&lt;span class="lnt">37
+&lt;/span>&lt;span class="lnt">38
+&lt;/span>&lt;span class="lnt">39
+&lt;/span>&lt;span class="lnt">40
+&lt;/span>&lt;span class="lnt">41
+&lt;/span>&lt;span class="lnt">42
+&lt;/span>&lt;span class="lnt">43
+&lt;/span>&lt;span class="lnt">44
+&lt;/span>&lt;span class="lnt">45
+&lt;/span>&lt;span class="lnt">46
+&lt;/span>&lt;span class="lnt">47
+&lt;/span>&lt;span class="lnt">48
+&lt;/span>&lt;span class="lnt">49
+&lt;/span>&lt;span class="lnt">50
+&lt;/span>&lt;span class="lnt">51
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">// net/netfilter/ipvs/ip_vs_core.c
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">static unsigned int
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">ip_vs_in(struct netns_ipvs *ipvs, unsigned int hooknum, struct sk_buff *skb, int af)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">{
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">... ....
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">/*
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">* Check if the packet belongs to an existing connection entry
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">*/
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">cp = pp-&amp;gt;conn_in_get(ipvs, af, skb, &amp;amp;iph); //判断是否属于某个已有的connection
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">conn_reuse_mode = sysctl_conn_reuse_mode(ipvs);
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">//当conn_reuse_mode开启，同时出现端口复用（例如收到TCP的SYN包，并且也属于已有的 connection），进行处理
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">if (conn_reuse_mode &amp;amp;&amp;amp; !iph.fragoffs &amp;amp;&amp;amp; is_new_conn(skb, &amp;amp;iph) &amp;amp;&amp;amp; cp) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> bool uses_ct = false, resched = false;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> //如果开启了expire_nodest_conn、目标rs的weight为0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if (unlikely(sysctl_expire_nodest_conn(ipvs)) &amp;amp;&amp;amp; cp-&amp;gt;dest &amp;amp;&amp;amp;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> unlikely(!atomic_read(&amp;amp;cp-&amp;gt;dest-&amp;gt;weight))) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> resched = true;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> //查询是否用到了conntrack
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> uses_ct = ip_vs_conn_uses_conntrack(cp, skb);
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> } else if (is_new_conn_expected(cp, conn_reuse_mode)) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> //连接是 expected 的情况，比如 FTP
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> uses_ct = ip_vs_conn_uses_conntrack(cp, skb);
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if (!atomic_read(&amp;amp;cp-&amp;gt;n_control)) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> resched = true;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> } else {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> /* Do not reschedule controlling connection
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> * that uses conntrack while it is still
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> * referenced by controlled connection(s).
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> */
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> resched = !uses_ct;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> //如果expire_nodest_conn未开启，并且也非期望连接，实际上直接跳出了
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if (resched) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if (!atomic_read(&amp;amp;cp-&amp;gt;n_control))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ip_vs_conn_expire_now(cp);
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> __ip_vs_conn_put(cp);
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> //当开启了net.ipv4.vs.conntrack，SYN数据包会直接丢弃，等待客户端重新发送SYN
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if (uses_ct)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return NF_DROP;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> //未开启conntrack时，会进入下面ip_vs_try_to_schedule的流程
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cp = NULL;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">.... ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>TCP 请求发送第一个 SYN 包被丢弃后，需要等待一个 MSL （60s），客户端会重新发送 SYN。在高并发情况，由于会大量新建连接，会导致出现较多的端口重用情况，就导致连接等待 &amp;gt;=1s 进行重新发送握手包。所以，在上面的压测图中可以看到，connect 阶段最大会达到几秒钟。kubernetes 在1.13 版本开始，对该问题进行了优化，kube-proxy 默认会修改内核参数 net.ipv4.vs.conn_reuse_mode=0 。&lt;/p>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-6.png"
+width="1422"
+height="278"
+srcset="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-6_hu3c12d5b6d02bbbce91d9b22ae95f064a_48097_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-6_hu3c12d5b6d02bbbce91d9b22ae95f064a_48097_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="img"
+class="gallery-image"
+data-flex-grow="511"
+data-flex-basis="1227px"
+>&lt;/p>
+&lt;p>既然从 1.13 开始修改了默认参数，为什么我们的测试环境为 net.ipv4.vs.conn_reuse_mode=1 呢？先看一下，我们出现问题的环境 kubernetes 版本为 1.19.12，os 3.10.0。然后，我们对 1.19.12 k8s 代码进行 review 发现：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-go" data-lang="go">&lt;span class="line">&lt;span class="cl">&lt;span class="nx">connReuseMinSupportedKernelVersion&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="s">&amp;#34;4.1&amp;#34;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="o">...&lt;/span> &lt;span class="o">...&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">if&lt;/span> &lt;span class="nx">kernelVersion&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="nf">LessThan&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nx">version&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="nf">MustParseGeneric&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nx">connReuseMinSupportedKernelVersion&lt;/span>&lt;span class="p">))&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nx">klog&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="nf">Errorf&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s">&amp;#34;can&amp;#39;t set sysctl %s, kernel version must be at least %s&amp;#34;&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="nx">sysctlConnReuse&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="nx">connReuseMinSupportedKernelVersion&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span> &lt;span class="k">else&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">// Set the connection reuse mode
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="k">if&lt;/span> &lt;span class="nx">err&lt;/span> &lt;span class="o">:=&lt;/span> &lt;span class="nx">utilproxy&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="nf">EnsureSysctl&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nx">sysctl&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="nx">sysctlConnReuse&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="mi">0&lt;/span>&lt;span class="p">);&lt;/span> &lt;span class="nx">err&lt;/span> &lt;span class="o">!=&lt;/span> &lt;span class="kc">nil&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="kc">nil&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="nx">err&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="o">...&lt;/span> &lt;span class="o">...&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>在 &lt;a class="link" href="https://github.com/kubernetes/kubernetes/pull/82066" target="_blank" rel="noopener"
+>pr#82066&lt;/a> 中提到，由于出现 3.10 版本内核中部署 kube-proxy 开启 ipvs 模式后无法启动。社区增加了内核版本的 check，1.19.0 开始如果内核版本 &amp;lt;4.1 则不会修改 net.ipv4.vs.conn_reuse_mode 内核参数。&lt;/p>
+&lt;p>另外，上面 issue 中也提到了，主要影响是在大量短连接时会出现端口重用的情况。那如果我们将业务架构改成长连接是否就可以达到一样的效果呢？&lt;/p>
+&lt;p>&lt;!-- raw HTML omitted -->&lt;!-- raw HTML omitted -->&lt;/p>
+&lt;p>我们后端部署一个简单的 http server 进行压测可以发现，使用长连接的服务即便关闭端口复用 QPS 明显好与优化内核的场景。&lt;/p>
+&lt;p>第二个问题，开启 net.ipv4.vs.conn_reuse_mode 参数后，端口重用导致的问题。我们在上文中提到过社区的一个 issue &lt;a class="link" href="https://github.com/kubernetes/kubernetes/issues/81775" target="_blank" rel="noopener"
+>#81775&lt;/a>。当开启端口重用，单个客户端使用 vip 发送大量请求，如果某个 pod 销毁会出现 no route to host 报错。&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">08:50:10 E http_client.go:558&amp;gt; Unable to connect to 10.86.6.96:80 : dial tcp 10.86.6.96:80: connect: no route to host 08:50:11 E http_client.go:558&amp;gt; Unable to connect to 10.86.6.96:80 : dial tcp 10.86.6.96:80: connect: no route to host 08:50:12 E http_client.go:558&amp;gt; Unable to connect to 10.86.6.96:80 : dial tcp 10.86.6.96:80: connect: no route to host 08:50:13 E http_client.go:558&amp;gt; Unable to connect to 10.86.6.96:80 : dial tcp 10.86.6.96:80: connect: no route to host
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>issue 中进行了大量讨论，我在这里只简单分析一下出现该问题的原因。&lt;/p>
+&lt;p>在 Kubernetes 1.13 之前，kube-proxy ipvs 模式并不支持优雅删除，当 Endpoint 被删除时，kube-proxy 会直接移除掉 ipvs 中对应的 rs，这样会导致后续的数据包被丢掉。&lt;/p>
+&lt;p>在 1.13 版本后，Kubernetes 添加了&lt;strong>IPVS 优雅删除&lt;/strong>的逻辑：&lt;/p>
+&lt;ul>
+&lt;li>当 Pod 被删除时，kube-proxy 会先将 rs 的&lt;code>weight&lt;/code>置为 0，以防止新连接的请求发送到此 rs，由于不再直接删除 rs，旧连接仍能与 rs 正常通信；&lt;/li>
+&lt;li>当 rs 的&lt;code>ActiveConn &lt;/code>数量为 0（现在已改为&lt;code>ActiveConn+InactiveConn==0&lt;/code>)，即不再有连接转发到此 rs 时，此 rs 才会真正被移除。&lt;/li>
+&lt;/ul>
+&lt;p>上面有提过 InactiveConn 是处于 TIME_WAIT 的连接，那每个处于 InactiveConn 的连接多久会过期呢，默认是120s，通过 ipvsadm -L &amp;ndash;timeout 可以看到默认值：&lt;/p>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-9.png"
+width="2662"
+height="496"
+srcset="https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-9_hu674ae24dcc1265d427fa4e80126db3d8_437372_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/ipvs-caused-problem/img/ipvs-analyze-9_hu674ae24dcc1265d427fa4e80126db3d8_437372_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="536"
+data-flex-basis="1288px"
+>&lt;/p>
+&lt;p>正常情况 120s 就将连接在 conntrack 表中删除。但当开启端口重用后，权重修改为 0 的 rs 如果再次被复用，对于端口复用的连接，ipvs 不会主动进行新的调度（调用&lt;code>ip_vs_try_to_schedule&lt;/code>方法）；同时，只是将&lt;code>weight&lt;/code>置为 0，也并不会触发由&lt;code>expire_nodest_conn &lt;/code>控制的结束连接或 DROP 操作，就这样，新连接的数据包当做什么都没发生一样，发送给了正在删除的 Pod。而这样的一个连接被 ipvs 认为是新的请求，会重置 ipvs timer，也就是说对应的这一个连接需要重新等待 120s 才会被删除。上面提到过，kube-proxy 在 ActiveConn+InactiveConn==0 时才会删除 rs，这样一来，只要不断的有端口复用的连接请求发来，rs 就不会被 kube-proxy 删除，上面提到的优雅删除是无法实现。&lt;/p>
+&lt;p>当后端应用进程退出后，后面端口复用的请求，会发送到已经被完全删除的容器 ip 上，就会出现上面的 connect: no route to host 报错。并且这个报错根据 ipvs 另一个参数配置有关：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;span class="lnt">35
+&lt;/span>&lt;span class="lnt">36
+&lt;/span>&lt;span class="lnt">37
+&lt;/span>&lt;span class="lnt">38
+&lt;/span>&lt;span class="lnt">39
+&lt;/span>&lt;span class="lnt">40
+&lt;/span>&lt;span class="lnt">41
+&lt;/span>&lt;span class="lnt">42
+&lt;/span>&lt;span class="lnt">43
+&lt;/span>&lt;span class="lnt">44
+&lt;/span>&lt;span class="lnt">45
+&lt;/span>&lt;span class="lnt">46
+&lt;/span>&lt;span class="lnt">47
+&lt;/span>&lt;span class="lnt">48
+&lt;/span>&lt;span class="lnt">49
+&lt;/span>&lt;span class="lnt">50
+&lt;/span>&lt;span class="lnt">51
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-c" data-lang="c">&lt;span class="line">&lt;span class="cl">&lt;span class="k">static&lt;/span> &lt;span class="kt">unsigned&lt;/span> &lt;span class="kt">int&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="nf">ip_vs_in&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="k">struct&lt;/span> &lt;span class="n">netns_ipvs&lt;/span> &lt;span class="o">*&lt;/span>&lt;span class="n">ipvs&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="kt">unsigned&lt;/span> &lt;span class="kt">int&lt;/span> &lt;span class="n">hooknum&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="k">struct&lt;/span> &lt;span class="n">sk_buff&lt;/span> &lt;span class="o">*&lt;/span>&lt;span class="n">skb&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="kt">int&lt;/span> &lt;span class="n">af&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">...&lt;/span> &lt;span class="p">....&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="cm">/*
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="cm"> * Check if the packet belongs to an existing connection entry
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="cm"> */&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="n">cp&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">pp&lt;/span>&lt;span class="o">-&amp;gt;&lt;/span>&lt;span class="nf">conn_in_get&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">ipvs&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">af&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">skb&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="o">&amp;amp;&lt;/span>&lt;span class="n">iph&lt;/span>&lt;span class="p">);&lt;/span> &lt;span class="c1">//判断是否属于某个已有的connection
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="n">conn_reuse_mode&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nf">sysctl_conn_reuse_mode&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">ipvs&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">//当conn_reuse_mode开启，同时出现端口复用（例如收到TCP的SYN包，并且也属于已有的 connection），进行处理
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span>&lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="n">conn_reuse_mode&lt;/span> &lt;span class="o">&amp;amp;&amp;amp;&lt;/span> &lt;span class="o">!&lt;/span>&lt;span class="n">iph&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">fragoffs&lt;/span> &lt;span class="o">&amp;amp;&amp;amp;&lt;/span> &lt;span class="nf">is_new_conn&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">skb&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="o">&amp;amp;&lt;/span>&lt;span class="n">iph&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="o">&amp;amp;&amp;amp;&lt;/span> &lt;span class="n">cp&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">bool&lt;/span> &lt;span class="n">uses_ct&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">false&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">resched&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">false&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">//如果开启了expire_nodest_conn、目标rs的weight为0
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="nf">unlikely&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nf">sysctl_expire_nodest_conn&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">ipvs&lt;/span>&lt;span class="p">))&lt;/span> &lt;span class="o">&amp;amp;&amp;amp;&lt;/span> &lt;span class="n">cp&lt;/span>&lt;span class="o">-&amp;gt;&lt;/span>&lt;span class="n">dest&lt;/span> &lt;span class="o">&amp;amp;&amp;amp;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nf">unlikely&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="o">!&lt;/span>&lt;span class="nf">atomic_read&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="o">&amp;amp;&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="o">-&amp;gt;&lt;/span>&lt;span class="n">dest&lt;/span>&lt;span class="o">-&amp;gt;&lt;/span>&lt;span class="n">weight&lt;/span>&lt;span class="p">)))&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">resched&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">true&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">//查询是否用到了conntrack
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="n">uses_ct&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nf">ip_vs_conn_uses_conntrack&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">skb&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span> &lt;span class="k">else&lt;/span> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="nf">is_new_conn_expected&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">conn_reuse_mode&lt;/span>&lt;span class="p">))&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">//连接是expected的情况，比如FTP
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="n">uses_ct&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nf">ip_vs_conn_uses_conntrack&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">skb&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="o">!&lt;/span>&lt;span class="nf">atomic_read&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="o">&amp;amp;&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="o">-&amp;gt;&lt;/span>&lt;span class="n">n_control&lt;/span>&lt;span class="p">))&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">resched&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">true&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span> &lt;span class="k">else&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="cm">/* Do not reschedule controlling connection
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="cm"> * that uses conntrack while it is still
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="cm"> * referenced by controlled connection(s).
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="cm"> */&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">resched&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="o">!&lt;/span>&lt;span class="n">uses_ct&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">//如果expire_nodest_conn未开启，并且也非期望连接，实际上直接跳出了
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="n">resched&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="o">!&lt;/span>&lt;span class="nf">atomic_read&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="o">&amp;amp;&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="o">-&amp;gt;&lt;/span>&lt;span class="n">n_control&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nf">ip_vs_conn_expire_now&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nf">__ip_vs_conn_put&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">cp&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">//当开启了net.ipv4.vs.conntrack，SYN数据包会直接丢弃，等待客户端重新发送SYN
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="n">uses_ct&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="n">NF_DROP&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">//未开启conntrack时，会进入下面ip_vs_try_to_schedule的流程
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="n">cp&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">NULL&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">....&lt;/span> &lt;span class="p">...&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;ul>
+&lt;li>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">expire_nodest_conn=0 时，当后端 rs 不可达时，ipvs 会直接将数据包丢弃；
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;/li>
+&lt;li>
+&lt;p>expire_nodest_conn=1 时，当后端 rs 不可达，立即会返回一个报错给客户端。&lt;/p>
+&lt;/li>
+&lt;/ul>
+&lt;p>针对这个问题，只在 kubernetes 上并不能完美的解决，例如：kube-router 中增加了优雅下线，会等待 Pod 配置的 TerminationGracePeriodSeconds 后进行删除 rs，这样只能够在一定程度上避免该问题。&lt;/p>
+&lt;h3 id="单核性能更优">单核性能更优？&lt;/h3>
+&lt;p>第三个问题，为什么使用 docker run 在线推理业务可以达到 4000 QPS，而 Kubernetes 容器通过内核优化后只能达到 2000？&lt;/p>
+&lt;p>针对这个问题，首先和业务方同学进行确认启动 docker 的参数，经过确认发现业务方同学误将 &amp;ndash;cpuset-cpus 当作限制 cpu 使用了，其启动参数命令为：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">docker run --cpuset-cpus 4 xxxx
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>这个启动命令，最终创建的容器其实只使用了一个核，并且将应用进程绑定到了第 4 个 cpu 上。然后，通过修改命令改成非绑核，使用下面命令启动：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">docker run --cpu-quota 400000 xxxx
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>再进行压测 QPS 降低到了 2500，已经和 kubernetes 创建的容器非常接近。由于使用 vip 会经过 ipvs 进行数据包的处理，会有一定的性能损耗，这个结果也比较合理。&lt;/p>
+&lt;p>那为什么绑核情况分配1个 cpu 的应用性能会比没有绑核 cpu 会好一倍呢？&lt;/p>
+&lt;p>猜测和业务服务逻辑有关，后面还要再进行验证。&lt;/p>
+&lt;p>沟通下来确认这个服务业务功能是：首先做少量的数学运算，然后再与通过 grpc 调用后端服务拿到的结果进行计算，将最终的结果返回给客户端。这样的话，这个业务应该算是一个 io 密集型应用，并不需要较高的 cpu 的， 绑核后能够减少 cpu 之间频繁的上下文切换，从而带来更好的效果。&lt;/p>
+&lt;h2 id="总结">总结&lt;/h2>
+&lt;p>通过修改 ipvs 内核参数，协助联邦同学解决了遇到的吞吐率问题，将 QPS 从 200 提升到了 2000+。&lt;/p>
+&lt;p>然后，我们并不是止步于解决问题，对问题过程中遇到的疑惑进一步研究，帮助我们能够对 kubernetes 系统有全面的把控。&lt;/p>
+&lt;ul>
+&lt;li>在 1.19.0 版本开始 kubernetes 对 ipvs 默认内核参数进行了改进，当内核版本 &amp;lt;4.1 时，kube-proxy 不会修改 ipvs 内核参数 net.ipv4.vs.conn_reuse_mode。&lt;/li>
+&lt;li>通过修改内核参数提高了吞吐率，但同时带来了优雅下线的问题，在 5.9 开始 linux 内核层面已有解决。另外，我们针对可以对业务架构优化的场景使用长连接方式进行压测，能够显著的解决吞吐率降低的问题。&lt;/li>
+&lt;li>对于 docker run 场景 QPS 是 Kubernetes 容器的两倍问题，我们发现业务同学使用 docker 运行时使用了 &amp;ndash;cpuset-cpus 参数，也就是将应用绑定到某一个 cpu 核上。这说明对于某些应用并不是分配的应用 cpu 越多，性能越好。&lt;/li>
+&lt;/ul>
+&lt;p>目前，发现问题的主要场景是在使用官方默认网络组件 kube-proxy 带来的问题。而我们 IDC 内部使用 kube-router 使用了和 Pod TerminationGracePeriodSeconds 一致的等待时间来优雅删除 rs。&lt;/p>
+&lt;p>另外，针对 ipvs 性能社区也有一些使用 eBPF 来实现的解决方案，例如：Cillium、腾讯 ipvs-ebpf 等。&lt;/p>
+&lt;h2 id="参考">参考&lt;/h2>
+&lt;ol>
+&lt;li>&lt;a class="link" href="https://marc.info/?l=linux-virtual-server&amp;amp;m=151683112005533&amp;amp;w=2" target="_blank" rel="noopener"
+>https://marc.info/?l=linux-virtual-server&amp;m=151683112005533&amp;w=2&lt;/a>&lt;/li>
+&lt;li>&lt;a class="link" href="https://github.com/kubernetes/kubernetes/issues/70747" target="_blank" rel="noopener"
+>IPVS low throughput&lt;/a>&lt;/li>
+&lt;li>&lt;a class="link" href="http://patchwork.ozlabs.org/project/netfilter-devel/patch/20200701151719.4751-1-ja@ssi.bg/" target="_blank" rel="noopener"
+>解决关闭端口复用出现 1s 延迟的 patch&lt;/a>&lt;/li>
+&lt;li>&lt;a class="link" href="http://patchwork.ozlabs.org/project/netfilter-devel/patch/20200708161638.13584-1-kim.andrewsy@gmail.com/" target="_blank" rel="noopener"
+>开启端口复用后 rs 下线导致后端不可用问题&lt;/a>&lt;/li>
+&lt;li>&lt;a class="link" href="https://cloud.tencent.com/developer/article/1687922" target="_blank" rel="noopener"
+>绕过conntrack，使用eBPF增强 IPVS优化K8s网络性能&lt;/a>&lt;/li>
 &lt;/ol></description></item><item><title>endpoint 更新后 vip 转发实现探究</title><link>https://jasonrd.github.io/blog/p/how-endpoint-flush-ipvs/</link><pubDate>Sun, 19 Dec 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/how-endpoint-flush-ipvs/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/how-endpoint-flush-ipvs/the-creative-exchange-d2zvqp3fpro-unsplash.jpg" alt="Featured image of post endpoint 更新后 vip 转发实现探究" />&lt;h2 id="背景">背景&lt;/h2>
 &lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/how-endpoint-flush-ipvs/img/endpoint-1.png"
 width="1182"
