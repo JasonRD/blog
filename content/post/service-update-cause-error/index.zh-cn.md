@@ -1,5 +1,5 @@
 ---
-title: "云上 pod 下线引起短时服务不可用"
+title: "pod 销毁过程引起短时服务不可用"
 date: 2021-11-01
 slug: service-cause-failure
 image: luca-bravo-alS7ewQ41M8-unsplash.jpg

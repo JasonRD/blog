@@ -2,7 +2,7 @@
 title: "kubelet 开启 static 引发 gpu 容器部署异常"
 description: "分析 gpu 容器部署到开启 static 节点后，出现无法启动的问题"
 date: 2021-06-05
-slug: ipvs-caused-problem
+slug: gpu-start-failure
 categories:
     - kubernetes
     - gpu
