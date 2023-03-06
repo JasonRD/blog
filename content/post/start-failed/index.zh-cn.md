@@ -2,6 +2,7 @@
 title: "kubelet 开启 static 引发 gpu 容器部署异常"
 description: "分析 gpu 容器部署到开启 static 节点后，出现无法启动的问题"
 date: 2021-06-05
+image: the-creative-exchange-d2zvqp3fpro-unsplash.jpg
 slug: gpu-start-failure
 categories:
     - kubernetes
