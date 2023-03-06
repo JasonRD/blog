@@ -973,7 +973,7 @@ data-flex-basis="679px"
 >Issue 572 - Graceful termination&lt;/a>&lt;/li>
 &lt;li>&lt;a class="link" href="https://github.com/kubernetes/kubernetes/pull/66012" target="_blank" rel="noopener"
 >kube-proxy ipvs support graceful termination&lt;/a>&lt;/li>
-&lt;/ol></description></item><item><title>云上 pod 下线引起短时服务不可用</title><link>https://jasonrd.github.io/blog/p/service-cause-failure/</link><pubDate>Mon, 01 Nov 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/service-cause-failure/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/service-cause-failure/luca-bravo-alS7ewQ41M8-unsplash.jpg" alt="Featured image of post 云上 pod 下线引起短时服务不可用" />&lt;h2 id="背景">背景&lt;/h2>
+&lt;/ol></description></item><item><title>pod 销毁过程引起短时服务不可用</title><link>https://jasonrd.github.io/blog/p/service-cause-failure/</link><pubDate>Mon, 01 Nov 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/service-cause-failure/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/service-cause-failure/luca-bravo-alS7ewQ41M8-unsplash.jpg" alt="Featured image of post pod 销毁过程引起短时服务不可用" />&lt;h2 id="背景">背景&lt;/h2>
 &lt;p>近日，接连收到多个云上站点业务出现 502 问题反馈：&lt;/p>
 &lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/service-cause-failure/img/502-error-1.png"
 width="2980"
