@@ -2439,63 +2439,135 @@ data-flex-basis="329px"
 >https://github.com/kubernetes/kubernetes/pull/86230&lt;/a>&lt;/li>
 &lt;li>&lt;a class="link" href="https://github.com/kubernetes/kubernetes/issues/86942" target="_blank" rel="noopener"
 >https://github.com/kubernetes/kubernetes/issues/86942&lt;/a>&lt;/li>
-&lt;/ol></description></item><item><title>kubelet 开启 static 引发 gpu 容器部署异常</title><link>https://jasonrd.github.io/blog/p/gpu-start-failure/</link><pubDate>Sat, 05 Jun 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/gpu-start-failure/</guid><description>&lt;h2 id="问题描述">问题描述&lt;/h2>
+&lt;/ol></description></item><item><title>kubelet 开启 static 引发 gpu 容器部署异常</title><link>https://jasonrd.github.io/blog/p/gpu-start-failure/</link><pubDate>Sat, 05 Jun 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/gpu-start-failure/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/gpu-start-failure/the-creative-exchange-d2zvqp3fpro-unsplash.jpg" alt="Featured image of post kubelet 开启 static 引发 gpu 容器部署异常" />&lt;h2 id="问题描述">问题描述&lt;/h2>
 &lt;p>AI 应用在迁移到 k8s 部署后发现应用在启动阶段耗时长，且非常容易失败，查看日志发现应用包找不到 GPU 设备问题。&lt;/p>
 &lt;h2 id="问题分析">问题分析&lt;/h2>
 &lt;p>排查发现出现问题主要在开启了 kubelet static 节点，频繁的出现业务发布失败的情况，报错信息：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-1.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-1.png"
+width="2110"
+height="744"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-1_hu355b99e666a512281a9526c0e78e6c9b_1959210_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-1_hu355b99e666a512281a9526c0e78e6c9b_1959210_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="283"
+data-flex-basis="680px"
 >&lt;/p>
 &lt;p>我们进行了一些研究，发现 kubernetes 社区（参考2）和 nvidia-docker （参考3）有相关 issue 讨论，在讨论中 nvidia 员工 &lt;a class="link" href="https://github.com/klueska" target="_blank" rel="noopener"
 >klueska&lt;/a> 给出了具体原因：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-2.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-2.png"
+width="2254"
+height="1460"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-2_hu0b141aab2783c4ea50e2717b6e4ccb4a_1737551_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-2_hu0b141aab2783c4ea50e2717b6e4ccb4a_1737551_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="154"
+data-flex-basis="370px"
 >&lt;/p>
 &lt;p>究其根本，是 nvidia-plugin 在容器启动前会通过 nividia-docker runtime 将 gpu device mount 到容器内部，这些 mount 信息对 docker 是不可见的。我们把 kubernetes 的内核绑定参数 CPUManager=static 开启后，kubelet CPUManager 会定期 update 容器 cpuset cgroup 配置，这时上面 nvidia mount 的 device 被清除，导致无法分配 gpu 。nvidia-plugin 通过&lt;a class="link" href="https://github.com/NVIDIA/k8s-device-plugin/commit/ea604b28beccf9eaf45f3b26ce01c6821b3fa4a6" target="_blank" rel="noopener"
 >在 kubelet 调用 Allocate 接口时返回 device 列表&lt;/a>，修复了该bug。&lt;/p>
 &lt;p>summarize：已定位到原因，nvidia 的 k8s 插件和 k8s 绑核功能不兼容导致，需要升级 nvidia 插件。&lt;/p>
 &lt;h2 id="验证">验证&lt;/h2>
 &lt;p>我们在线下搭建了 gpu 环境，分别使用 10.57.33.30、10.57.33.31 两台机器做对比测试。首先，我们替换 Nvidia daemonset 容器镜像为修复后的版本 ps/nvidia/nvidia/k8s-device-plugin:1.0.0-beta6，并且修改 daemonset 的升级策略为 OnDelete，这样删除 33.30 机器上 Nvidia pod ，新建的 pod 使用的镜像为升级后的版本。&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-3.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-3.png"
+width="1884"
+height="238"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-3_hu63ce0591c2802a66137121a8ac01ad05_100932_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-3_hu63ce0591c2802a66137121a8ac01ad05_100932_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="791"
+data-flex-basis="1899px"
 >&lt;/p>
 &lt;h3 id="有问题插件验证">有问题插件验证&lt;/h3>
 &lt;p>我们测试 33.31 上的 ai-face-gen 应用，进入 pod 内部，执行命令 nvidia-smi ，会报 nvm unknown error：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-4.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-4.png"
+width="1382"
+height="204"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-4_hu25302102925273da08dc58183598074d_82485_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-4_hu25302102925273da08dc58183598074d_82485_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="677"
+data-flex-basis="1625px"
 >&lt;/p>
 &lt;p>我们安装参考3中的相关描述，docker inspect 容器，查看一下挂载的 devices 列表：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-5.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-5.png"
+width="1686"
+height="148"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-5_hud35159a7c97337443ab7934a4fddbf73_60960_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-5_hud35159a7c97337443ab7934a4fddbf73_60960_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="1139"
+data-flex-basis="2734px"
 >&lt;/p>
 &lt;p>会发现列表为空。然后，我们测试升级后应用报错场景。删除 pod af-55666f8bf8-tffxg，容器重建后的 pod 出现启动失败：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-6.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-6.png"
+width="1944"
+height="424"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-6_hu8b0d76800b3d11223d79cc4505a2aa6c_200220_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-6_hu8b0d76800b3d11223d79cc4505a2aa6c_200220_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="458"
+data-flex-basis="1100px"
 >&lt;/p>
 &lt;p>查看应用日志，报错和线上场景相同：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-7.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-7.png"
+width="1990"
+height="356"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-7_hu8a7a2e2e9bccd74e5344669a110d0457_270503_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-7_hu8a7a2e2e9bccd74e5344669a110d0457_270503_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="558"
+data-flex-basis="1341px"
 >&lt;/p>
 &lt;h3 id="升级新版插件验证">升级新版插件验证&lt;/h3>
 &lt;p>我们首先将 33.30 机器的 nvidia-plugin 升级到最新版本（其中1.11 版本为内部的版本号，1.0.0-beta6 为社区修复gpu 问题的最新版本）：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-8.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-8.png"
+width="1974"
+height="576"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-8_hua0cabf071cc17ee44fdbbb46a3c3b9a3_266240_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-8_hua0cabf071cc17ee44fdbbb46a3c3b9a3_266240_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="342"
+data-flex-basis="822px"
 >&lt;/p>
 &lt;p>然后和上面同样的操作流程，我们首先进入容器 af-55666f8bf8-7z4ld 内部执行命令 nvidia-smi：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-9.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-9.png"
+width="1508"
+height="828"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-9_hud504709459cc423683f75cd9b2cfe80f_360950_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-9_hud504709459cc423683f75cd9b2cfe80f_360950_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="182"
+data-flex-basis="437px"
 >&lt;/p>
 &lt;p>可以发现命令执行正常。然后 同样使用 docker inspect 命令查看容器挂载 device 列表：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-10.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-10.png"
+width="1744"
+height="166"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-10_huae3377f711209b7445097fbd0c5bba33_102242_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-10_huae3377f711209b7445097fbd0c5bba33_102242_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="1050"
+data-flex-basis="2521px"
 >&lt;/p>
 &lt;p>device 列表中挂载了 gpu 显卡和相关驱动。最后，我们删除一下容器 af-55666f8bf8-7z4ld，验证一下容器发布是否会出现失败的情况：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-11.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-11.png"
+width="1974"
+height="266"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-11_hu09bf8cbbac172389b22febc37c01741c_106324_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-11_hu09bf8cbbac172389b22febc37c01741c_106324_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="742"
+data-flex-basis="1781px"
 >&lt;/p>
 &lt;p>pod 启动正常，执行 nvidia-smi 命令正常：&lt;/p>
-&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/img/gpu-start-failure-12.png"
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-12.png"
+width="1358"
+height="740"
+srcset="https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-12_huc638e291bb26b4209fd149821a4f2080_301027_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/gpu-start-failure/img/gpu-start-failure-12_huc638e291bb26b4209fd149821a4f2080_301027_1024x0_resize_box_3.png 1024w"
 loading="lazy"
+class="gallery-image"
+data-flex-grow="183"
+data-flex-basis="440px"
 >&lt;/p>
 &lt;h2 id="参考">参考&lt;/h2>
 &lt;ol>
