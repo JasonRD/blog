@@ -1140,4 +1140,1114 @@ data-flex-basis="511px"
 >&lt;/li>
 &lt;/ol>
 &lt;/li>
-&lt;/ol></description></item></channel></rss>
+&lt;/ol></description></item><item><title>informer 内部实现探究</title><link>https://jasonrd.github.io/blog/p/client-go-informer/</link><pubDate>Fri, 15 Oct 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/client-go-informer/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/client-go-informer/informer-arch.png" alt="Featured image of post informer 内部实现探究" />&lt;h2 id="使用套路">使用套路&lt;/h2>
+&lt;p>informer 使用套路（其中略去一些细节，具体参考&lt;a class="link" href="https://github.com/kubernetes/client-go/blob/master/examples/workqueue/main.go" target="_blank" rel="noopener"
+>informers demo&lt;/a>）:&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;span class="lnt">35
+&lt;/span>&lt;span class="lnt">36
+&lt;/span>&lt;span class="lnt">37
+&lt;/span>&lt;span class="lnt">38
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl"># 1. 创建 k8s client 对象：
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">cfg, err = clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">kube_client, err = kubernetes.NewForConfig(cfg)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"># 2. 创建资源 informer，以 POD 为例：
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">factory = kubeinformers.NewSharedInformerFactory(client, 0)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">pod_informer = ctrl.factory.Core().V1().Pods()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"># 3. 注册回调函数，用来处理 Add、Update、Delete 事件：
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">pod_informer.Informer().AddEventHandler(handler)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">handler 实现了 OnAdd、OnUpdate、OnDelete 三个接口的:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">type handler struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> queue: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> OnAdd: func (obj interface{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> queue.Add(cache.MetaNamespaceKeyFunc(obj))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> },
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> OnUpdate: func(obj, obj interface{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> queue.Add(cache.MetaNamespaceKeyFunc(obj))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> },
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> OnDelete: func(obj interface{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> },
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Task: func() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> key, quit := c.queue.Get()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer c.queue.Done(key)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"># 4. 启动 informer
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">factory.Start(stop)
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>informers 包中提供了工厂类，通过调用接口&lt;code>factory.Core().V1().Pods()&lt;/code>创建 k8s pod informer 对象，其他 k8s 内置资源类同。informer 封装都在 &lt;code>k8s.io/client-go/pkg/informers&lt;/code> 包中。&lt;/p>
+&lt;h2 id="执行逻辑">执行逻辑&lt;/h2>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/client-go-informer/img/informer-arch.png"
+width="1438"
+height="1070"
+srcset="https://jasonrd.github.io/blog/blog/p/client-go-informer/img/informer-arch_hu99f14accc96104069d2695ab8dd85549_718091_480x0_resize_box_3.png 480w, https://jasonrd.github.io/blog/blog/p/client-go-informer/img/informer-arch_hu99f14accc96104069d2695ab8dd85549_718091_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="134"
+data-flex-basis="322px"
+>&lt;/p>
+&lt;h3 id="eventhandler-回调函数注册和执行过程">eventhandler 回调函数注册和执行过程&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">type sharedIndexInformer struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 带索引资源 cache
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> indexer Indexer
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 资源控制器，负责:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 1. 启动 reflector list&amp;amp;watch;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 2. Add、Update、Delete 事件发生时，通知 processor 执行订阅任务；
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 3. 以及cache缓存更新，处理逻辑在 sharedIndexInformer.HandleDeltas；
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // controller 对象在执行 sharedIndexInformer.Run 函数时初始化
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> controller Controller
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 负责事件触发时，执行订阅者的 OnAdd、OnUpdate、OnDelete 回调逻辑
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> processor *sharedProcessor
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // list&amp;amp;watch 资源变化，watch 通过 chunk 实现资源发生变更时进行推送
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> listerWatcher ListerWatcher
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 关注的资源类型
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> objectType runtime.Object
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> .......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>sharedIndexInformer 对象被创建后，执行 &lt;code>Run&lt;/code> 函数启动事件监听：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;span class="lnt">35
+&lt;/span>&lt;span class="lnt">36
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (s *sharedIndexInformer) Run(stopCh &amp;lt;-chan struct{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer utilruntime.HandleCrash()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 先入先出队列
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fifo := NewDeltaFIFO(MetaNamespaceKeyFunc, s.indexer)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cfg := &amp;amp;Config{
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Queue: fifo,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ListerWatcher: s.listerWatcher,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ObjectType: s.objectType,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> FullResyncPeriod: s.resyncCheckPeriod,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> RetryOnError: false,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ShouldResync: s.processor.shouldResync,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 消费 fifo 队列，在 controller.processLoop 函数中执行
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Process: s.HandleDeltas,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 减小锁粒度
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> func() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.startedLock.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer s.startedLock.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 初始化 controller
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.controller = New(cfg)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.controller.(*controller).clock = s.clock
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.started = true
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 首先启动事件处理器，监听事件通知
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wg.StartWithChannel(processorStopCh, s.processor.run)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 启动 controller
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.controller.Run(stopCh)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>在了解 &lt;code>processor.run&lt;/code> 函数逻辑前，先了解一下我们关注的事件回调函数是如何注册的。在调用 sharedIndexInformer.AddEventHandler(handler) 实际上就是创建一个 processListner 事件监听器，然后注册到 processor 中进行事件监听：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;span class="lnt">6
+&lt;/span>&lt;span class="lnt">7
+&lt;/span>&lt;span class="lnt">8
+&lt;/span>&lt;span class="lnt">9
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (s *sharedIndexInformer) AddEventHandlerWithResyncPeriod(handler ResourceEventHandler, resyncPeriod time.Duration) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> listener := newProcessListener(handler, resyncPeriod, determineResyncPeriod(resyncPeriod, s.resyncCheckPeriod), s.clock.Now(), initialBufferSize)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 注册到 processor listeners 数组中
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.processor.addListener(listener)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>明白了回调函数如何注册的，接下来看一下 &lt;code>processor.run&lt;/code> 函数，了解一下什么时候执行回调函数：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (p *sharedProcessor) run(stopCh &amp;lt;-chan struct{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 细粒度锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> func() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.listenersLock.RLock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer p.listenersLock.RUnlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 异步启动所有监听器，完成事件的消费
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for _, listener := range p.listeners {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.wg.Start(listener.run)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.wg.Start(listener.pop)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.listenersStarted = true
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &amp;lt;-stopCh
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.listenersLock.RLock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer p.listenersLock.RUnlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for _, listener := range p.listeners {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> close(listener.addCh) // Tell .pop() to stop. .pop() will tell .run() to stop
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.wg.Wait() // Wait for all .pop() and .run() to stop
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>上面函数中 &lt;code>listener.run&lt;/code> 和 &lt;code>listener.pop&lt;/code> 函数，两个函数配合完成收到事件，并执行回调：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;span class="lnt">35
+&lt;/span>&lt;span class="lnt">36
+&lt;/span>&lt;span class="lnt">37
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">// 消费 processor 广播的事件，并通过 channel 内部转发
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// 这个函数挺有意思，通过两个 channel 完成事件的缓存和通知。通过 addCh 无缓存 channel 通知。
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// 首次函数启动或通知事件消费完成，nextCh 为 nil，第一个 case 会一直阻塞到新事件过来
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// 如果事件通知速度大于消费速度，会将事件缓存在 pendingNotifications 先入先出队列，然后异步消费
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (p *processorListener) pop() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer utilruntime.HandleCrash()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer close(p.nextCh) // Tell .run() to stop
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> var nextCh chan&amp;lt;- interface{}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> var notification interface{}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> select {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 1 listener 内部广播事件
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> case nextCh &amp;lt;- notification:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // Notification dispatched
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> var ok bool
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 2 消费缓存事件
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> notification, ok = p.pendingNotifications.ReadOne()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if !ok { // Nothing to pop
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> nextCh = nil // Disable this select case
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 3 接收 processor 通知事件
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> case notificationToAdd, ok := &amp;lt;-p.addCh:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if !ok {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 4 notification 为 nil 说明没有未消费的事件，之间内部广播
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if notification == nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> notification = notificationToAdd
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> nextCh = p.nextCh
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 5 来不及消费，先暂存
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> } else {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.pendingNotifications.WriteOne(notificationToAdd)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>下面使用了 wait.Until 函数，在闭包执行完成后，间隔1分钟再次执行：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (p *processorListener) run() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> stopCh := make(chan struct{})
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wait.Until(func() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // this gives us a few quick retries before a long pause and then a few more quick retries
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> err := wait.ExponentialBackoff(retry.DefaultRetry, func() (bool, error) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 我们关注回调真正的执行地方
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // p.nextCh 无缓冲 channel 由上面 pop 函数传入事件
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for next := range p.nextCh {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> switch notification := next.(type) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> case updateNotification:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.handler.OnUpdate(notification.oldObj, notification.newObj)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> case addNotification:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.handler.OnAdd(notification.newObj)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> case deleteNotification:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p.handler.OnDelete(notification.oldObj)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> default:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> utilruntime.HandleError(fmt.Errorf(&amp;#34;unrecognized notification: %#v&amp;#34;, next))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // the only way to get here is if the p.nextCh is empty and closed
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return true, nil
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> })
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // the only way to get here is if the p.nextCh is empty and closed
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err == nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> close(stopCh)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }, 1*time.Minute, stopCh)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;h3 id="更新-indexer-缓存和-deltas-evnet-事件处理">更新 indexer 缓存和 deltas evnet 事件处理&lt;/h3>
+&lt;p>HandleDeltas 函数实现了 fifo 队列消费逻辑，分别对各事件类型分别操作 indexer 索引缓存和通知 processor 向订阅者分发事件。&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">// 处理 fifo 弹出事件
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (s *sharedIndexInformer) HandleDeltas(obj interface{}) error {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> .......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for _, d := range obj.(Deltas) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> switch d.Type {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> case Sync, Added, Updated:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if old, exists, err := s.indexer.Get(d.Object); err == nil &amp;amp;&amp;amp; exists {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err := s.indexer.Update(d.Object); err != nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return err
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 通知 processor 向订阅者广播事件
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.processor.distribute(updateNotification{oldObj: old, newObj: d.Object}, isSync)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> } else {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err := s.indexer.Add(d.Object); err != nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return err
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.processor.distribute(addNotification{newObj: d.Object}, isSync)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> case Deleted:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err := s.indexer.Delete(d.Object); err != nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return err
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.processor.distribute(deleteNotification{oldObj: d.Object}, false)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return nil
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>HandleDeltas 函数的执行时在 controller 启动时，每秒钟调用 &lt;code>controller.processLoop&lt;/code> 消费 DeltaFIFO 中事件。&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (c *controller) Run(stopCh &amp;lt;-chan struct{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> r := NewReflector(
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> c.config.ListerWatcher,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> c.config.ObjectType,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> c.config.Queue,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> c.config.FullResyncPeriod,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> )
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ........
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wg.StartWithChannel(stopCh, r.Run)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wait.Until(c.processLoop, time.Second, stopCh)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>消费 listwatch 写入 DeltaFIFO 的事件。&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (c *controller) processLoop() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 弹出第一个事件，并消费
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // c.config.Process = sharedIndexInformer.HandleDeltas
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> obj, err := c.config.Queue.Pop(PopProcessFunc(c.config.Process))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err != nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err == FIFOClosedError {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if c.config.RetryOnError {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // This is the safe way to re-enqueue.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> c.config.Queue.AddIfNotPresent(obj)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;h3 id="list-watch-资源-event-事件和-deltas-event-生产">list watch 资源 Event 事件和 deltas event 生产&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">// Run starts a watch and handles watch events. Will restart the watch if it is closed.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// Run will exit when stopCh is closed.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (r *Reflector) Run(stopCh &amp;lt;-chan struct{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> klog.V(3).Infof(&amp;#34;Starting reflector %v (%s) from %s&amp;#34;, r.expectedType, r.resyncPeriod, r.name)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wait.Until(func() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err := r.ListAndWatch(stopCh); err != nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> utilruntime.HandleError(err)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }, r.period, stopCh)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>controller 启动 reflector，间隔 r.period 时间，通过 reflector.ListAndWatch 函数获取最新事件。&lt;/p>
+&lt;p>reflector.ListAndWatch 代码较长，就不在此列出，简单讲一下执行逻辑：&lt;/p>
+&lt;ol>
+&lt;li>首先通过 List 方法，一次性拉取所有资源，并获取最新 resourceVersion；&lt;/li>
+&lt;li>根据需要，启动定时异步 List 协程；&lt;/li>
+&lt;li>watch 资源直到 informer 退出。调用 watchHandler 获取资源变更（watch 使用 http 协议 chunk 机制完成）。对 response 反序列化成内部资源对象 &lt;code>event.Object&lt;/code>，根据 &lt;code>event.Type&lt;/code> 执行 &lt;code>r.store&lt;/code> 更新、删除、新增（其中，r.store 为 DeltaFIFO）；&lt;/li>
+&lt;/ol>
+&lt;h2 id="主要对象数据结构">主要对象数据结构&lt;/h2>
+&lt;h3 id="controller">Controller&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;span class="lnt">6
+&lt;/span>&lt;span class="lnt">7
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">// Controller is a generic controller framework.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">type controller struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> config Config
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> reflector *Reflector
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> reflectorMutex sync.RWMutex
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> clock clock.Clock
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;h3 id="reflector">reflector&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// Reflector watches a specified resource and causes all changes to be reflected in the given store.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">type Reflector struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // name identifies this reflector. By default it will be a file:line if possible.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> name string
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // metrics tracks basic metric information about the reflector
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> metrics *reflectorMetrics
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // The type of object we expect to place in the store.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> expectedType reflect.Type
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // The destination to sync up with the watch source
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> store Store
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // listerWatcher is used to perform lists and watches.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> listerWatcher ListerWatcher
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // period controls timing between one watch ending and
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // the beginning of the next one.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> period time.Duration
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> resyncPeriod time.Duration
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ShouldResync func() bool
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // clock allows tests to manipulate time
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> clock clock.Clock
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // lastSyncResourceVersion is the resource version token last
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // observed when doing a sync with the underlying store
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // it is thread safe, but not synchronized with the underlying store
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> lastSyncResourceVersion string
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // lastSyncResourceVersionMutex guards read/write access to lastSyncResourceVersion
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> lastSyncResourceVersionMutex sync.RWMutex
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;h3 id="sharedprocessor">sharedProcessor&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;span class="lnt">6
+&lt;/span>&lt;span class="lnt">7
+&lt;/span>&lt;span class="lnt">8
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">type sharedProcessor struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> listenersStarted bool
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> listenersLock sync.RWMutex
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> listeners []*processorListener
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> syncingListeners []*processorListener
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> clock clock.Clock
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wg wait.Group
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;h3 id="processlistner">processListner&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">type processorListener struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> nextCh chan interface{}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> addCh chan interface{}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> handler ResourceEventHandler
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // pendingNotifications is an unbounded ring buffer that holds all notifications not yet distributed.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // There is one per listener, but a failing/stalled listener will have infinite pendingNotifications
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // added until we OOM.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // TODO: This is no worse than before, since reflectors were backed by unbounded DeltaFIFOs, but
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // we should try to do something better.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // RingGrowing 是一个动态增长的循环队列
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> pendingNotifications buffer.RingGrowing
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;h2 id="疑问">疑问&lt;/h2>
+&lt;h3 id="为什么需要-waitforcachesync">为什么需要 waitForCacheSync&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (f *DeltaFIFO) HasSynced() bool {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.lock.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer f.lock.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return f.populated &amp;amp;&amp;amp; f.initialPopulationCount == 0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>&lt;code>waitForCacheSync&lt;/code> 最终回调用 &lt;code>DeltaFIFO.HasSynced&lt;/code> 函数来确定当前 cache 缓存全部写入 workqueue 中。
+在 调用 &lt;code>DeltaFIFO.Add&lt;/code>，以及 reflector list 完成资源，通过调用 replace 写入 deltafifo 时会 &lt;code>f.populated&lt;/code> 置为 true。&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;span class="lnt">35
+&lt;/span>&lt;span class="lnt">36
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (f *DeltaFIFO) Add(obj interface{}) error {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.lock.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer f.lock.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.populated = true
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (r *Reflector) ListAndWatch(stopCh &amp;lt;-chan struct{}) error {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> list, err := r.listerWatcher.List(options)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> items, err := meta.ExtractList(list)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if err := r.syncWith(items, resourceVersion); err != nil {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return fmt.Errorf(&amp;#34;%s: Unable to sync list result: %v&amp;#34;, r.name, err)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// syncWith replaces the store&amp;#39;s items with the given list.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (r *Reflector) syncWith(items []runtime.Object, resourceVersion string) error {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> found := make([]interface{}, 0, len(items))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for _, item := range items {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> found = append(found, item)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return r.store.Replace(found, resourceVersion)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (f *FIFO) Replace(list []interface{}, resourceVersion string) error {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if !f.populated {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.populated = true
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.initialPopulationCount = len(items)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>而 &lt;code>f.initialPopulationCount&lt;/code> 只有在 list 的所有资源都被 pop 后，才会被重新赋值为0：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (f *FIFO) Pop(process PopProcessFunc) (interface{}, error) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.lock.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer f.lock.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 并发验证
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for len(f.queue) == 0 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // When the queue is empty, invocation of Pop() is blocked until new item is enqueued.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // When Close() is called, the f.closed is set and the condition is broadcasted.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // Which causes this loop to continue and return from the Pop().
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if f.IsClosed() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return nil, FIFOClosedError
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.cond.Wait()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> id := f.queue[0]
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.queue = f.queue[1:]
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if f.initialPopulationCount &amp;gt; 0 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> f.initialPopulationCount--
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> .......
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>所以，根据源码分析，调用 &lt;code>waitForCacheSync&lt;/code> 是等待第一次 list 完全部资源后，并且 list 的资源全部写入到 &lt;code>workqueue&lt;/code> 后再启动对应的 work，处理事件。这样，降低了 list 大量资源时高并发资源处理资源问题。&lt;/p>
+&lt;h3 id="为什么使用-workqueue-">为什么使用 workqueue ？&lt;/h3>
+&lt;p>在一些 informer demo，以及 operator framework 的代码里面，都能看到 Add、Update、Delete 事件都要先写到 workqueue 中，然后再异步消费。不知道有没有思考过，为什么要加入 workqueue，而不是在事件函数里直接起一个协程来处理事件?&lt;/p>
+&lt;p>首先，考虑一个场景 &lt;code>Add -&amp;gt; Deleted -&amp;gt; Add&lt;/code>，如果并发处理同一个资源，会不会存在问题？针对顺序依赖问题，最简单方式就是使用队列。那并发执行问题呢？来看一下 worqueue 底层代码是怎么实现的：&lt;/p>
+&lt;p>&lt;code>k8s.io/client-go/util/workqueue&lt;/code> 包有多个文件：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">default_rate_limiters.go // 限速器，包含两种，全局限速（BucketRateLimiter）和针对 item 限速（ItemExponentialFailureRateLimiter）
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">delaying_queue.go // 延迟队列，支持延迟添加，队列使用的 queue
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">parallelizer.go // 并发控制器，
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">queue.go // 队列，会对添加的 key 去重，同一个 key 同时只会处理一次
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">rate_limitting_queue.go // 限速队列包装器，组合延迟队列、
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>在使用 informer 时，经常看到 &lt;code>workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())&lt;/code> 生成一个队列，缓存事件对象的 metaNamespaceKey。&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;span class="lnt">6
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func NewRateLimitingQueue(rateLimiter RateLimiter) RateLimitingInterface {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return &amp;amp;rateLimitingType{
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> DelayingInterface: NewDelayingQueue(),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> rateLimiter: rateLimiter,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func DefaultControllerRateLimiter() RateLimiter {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return NewMaxOfRateLimiter(
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 针对单个 item 限制处理间隔，最小为 5 毫秒，重新入队一次指数增长，最大为 1000 秒延迟
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // backoff := float64(r.baseDelay.Nanoseconds()) * math.Pow(2, float64(exp)) exp 是重新入队的次数
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // if backoff &amp;gt; math.MaxInt64 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // return r.maxDelay
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> NewItemExponentialFailureRateLimiter(5*time.Millisecond, 1000*time.Second),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 使用令牌桶限流算法，限制流速为每秒10个，桶大小为 100 能够应对100的突发
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &amp;amp;BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> )
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>&lt;code>delayQueue&lt;/code> 使用一个定时器，和带缓冲 channel（1000）延迟添加需要重新入队的 item，队列定义在 &lt;code>queue.go&lt;/code> 中。&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-go" data-lang="go">&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">// Type is a work queue (see the package comment).
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span>&lt;span class="kd">type&lt;/span> &lt;span class="nx">Type&lt;/span> &lt;span class="kd">struct&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">// 通过 slice 实现有序队列，在 queue 中的 item 必定在 dirty 中也存在
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="nx">queue&lt;/span> &lt;span class="p">[]&lt;/span>&lt;span class="nx">t&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">// Add 队列前需要先在这个集合中添加，确保队列中 item 的唯一性
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="c1">// processing 中的 item 会临时存在这个里面，调用 Type.Done 才 append 到 queue 中
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="nx">dirty&lt;/span> &lt;span class="nx">set&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">// 调用 Get 的 item 保存在这个集合中，同时在 queue 和 dirty 中删除
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="nx">processing&lt;/span> &lt;span class="nx">set&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1">// 队列使用信号量保证访问安全和通知等待消费的 worker
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">&lt;/span> &lt;span class="nx">cond&lt;/span> &lt;span class="o">*&lt;/span>&lt;span class="nx">sync&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="nx">Cond&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>下面了解一下，入队和出队的代码：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (q *Type) Get() (item interface{}, shutdown bool) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.cond.L.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer q.cond.L.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for len(q.queue) == 0 &amp;amp;&amp;amp; !q.shuttingDown {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.cond.Wait()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if len(q.queue) == 0 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // We must be shutting down.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return nil, true
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 代码编译时会有临时寄存器保存中间值
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 类似 temp=a, a=b, b=temp
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> item, q.queue = q.queue[0], q.queue[1:]
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.metrics.get(item)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.processing.insert(item)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.dirty.delete(item)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return item, false
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">// Add marks item as needing processing.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (q *Type) Add(item interface{}) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.cond.L.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer q.cond.L.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if q.shuttingDown {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if q.dirty.has(item) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.metrics.add(item)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.dirty.insert(item)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if q.processing.has(item) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.queue = append(q.queue, item)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> q.cond.Signal()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>所以，综上使用 &lt;code>workqueue&lt;/code> 保证了事件资源的唯一性。另外，消费失败的 item 可以通过调用 &lt;code>ratelimit.AddAfter&lt;/code> 和 &lt;code>ratelimit.AddRateLimited&lt;/code> 避免了 hotloop 的问题。&lt;code>AddRateLimited&lt;/code> 最终回调用 &lt;code>ItemFastSlowRateLimiter.When&lt;/code> 函数确保 failure item 的延迟指数增长。&lt;/p></description></item></channel></rss>
