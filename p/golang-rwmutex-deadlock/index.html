@@ -1,0 +1,296 @@
+<!doctype html><html lang=en dir=ltr><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=description content="从一个面试题开始深入了解 RWMutex 使用不当会导致死锁问题"><title>GO RWMutex 中隐藏的死锁问题</title><link rel=canonical href=https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/><link rel=stylesheet href=/blog/scss/style.min.8191399262444ab68b72a18c97392f5349be20a1615d77445be51e974c144cff.css><meta property="og:title" content="GO RWMutex 中隐藏的死锁问题"><meta property="og:description" content="从一个面试题开始深入了解 RWMutex 使用不当会导致死锁问题"><meta property="og:url" content="https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/"><meta property="og:site_name" content="jason's 博客"><meta property="og:type" content="article"><meta property="article:section" content="Post"><meta property="article:published_time" content="2021-11-09T00:00:00+00:00"><meta property="article:modified_time" content="2021-11-09T00:00:00+00:00"><meta property="og:image" content="https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/daedlock.jpeg"><meta name=twitter:site content="@jasonxie666"><meta name=twitter:creator content="@jasonxie666"><meta name=twitter:title content="GO RWMutex 中隐藏的死锁问题"><meta name=twitter:description content="从一个面试题开始深入了解 RWMutex 使用不当会导致死锁问题"><meta name=twitter:card content="summary_large_image"><meta name=twitter:image content="https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/daedlock.jpeg"></head><body class=article-page><script>(function(){const e="StackColorScheme";localStorage.getItem(e)||localStorage.setItem(e,"auto")})()</script><script>(function(){const t="StackColorScheme",e=localStorage.getItem(t),n=window.matchMedia("(prefers-color-scheme: dark)").matches===!0;e=="dark"||e==="auto"&&n?document.documentElement.dataset.scheme="dark":document.documentElement.dataset.scheme="light"})()</script><div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky"><button class="hamburger hamburger--spin" type=button id=toggle-menu aria-label=切换菜单>
+<span class=hamburger-box><span class=hamburger-inner></span></span></button><header><figure class=site-avatar><a href=/blog/><img src=/blog/img/avatar_hu92a1f0f4dac05816138a9efb01424f59_787601_300x0_resize_box_3.png width=300 height=300 class=site-logo loading=lazy alt=Avatar></a>
+<span class=emoji>🍥</span></figure><div class=site-meta><h1 class=site-name><a href=/blog>jason's 博客</a></h1><h2 class=site-description>Welcom</h2></div></header><ol class=social-menu><li><a href=https://github.com/JasonRD target=_blank title=GitHub rel=me><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6.0 00-1.3-3.2 4.2 4.2.0 00-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3.0 00-6.2.0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2.0 00-.1 3.2A4.6 4.6.0 004 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg></a></li><li><a href=https://twitter.com/jasonxie666 target=_blank title=Twitter rel=me><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-twitter" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M22 4.01c-1 .49-1.98.689-3 .99-1.121-1.265-2.783-1.335-4.38-.737S11.977 6.323 12 8v1c-3.245.083-6.135-1.395-8-4 0 0-4.182 7.433 4 11-1.872 1.247-3.739 2.088-6 2 3.308 1.803 6.913 2.423 10.034 1.517 3.58-1.04 6.522-3.723 7.651-7.742a13.84 13.84.0 00.497-3.753C20.18 7.773 21.692 5.25 22 4.009z"/></svg></a></li></ol><ol class=menu id=main-menu><li><a href=/blog/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><polyline points="5 12 3 12 12 3 21 12 19 12"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/><path d="M9 21v-6a2 2 0 012-2h2a2 2 0 012 2v6"/></svg><span>主页</span></a></li><li><a href=/blog/%E5%85%B3%E4%BA%8E/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="7" r="4"/><path d="M6 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"/></svg><span>关于</span></a></li><li><a href=/blog/archives/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><rect x="3" y="4" width="18" height="4" rx="2"/><path d="M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg><span>Archives</span></a></li><li><a href=/blog/search/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="10" cy="10" r="7"/><line x1="21" y1="21" x2="15" y2="15"/></svg><span>Search</span></a></li><li><a href=/blog/links/><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><path d="M10 14a3.5 3.5.0 005 0l4-4a3.5 3.5.0 00-5-5l-.5.5"/><path d="M14 10a3.5 3.5.0 00-5 0l-4 4a3.5 3.5.0 005 5l.5-.5"/></svg><span>Links</span></a></li><div class=menu-bottom-section><li id=i18n-switch><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 5h7"/><path d="M9 3v2c0 4.418-2.239 8-5 8"/><path d="M5 9c-.003 2.144 2.952 3.908 6.7 4"/><path d="M12 20l4-9 4 9"/><path d="M19.1 18h-6.2"/></svg><select name=language onchange="window.location.href=this.selectedOptions[0].value"><option value=https://jasonrd.github.io/blog/en/>English</option><option value=https://jasonrd.github.io/blog/ selected>中文</option></select></li><li id=dark-mode-toggle><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="8" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="16" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg><span>暗色模式</span></li></div></ol></aside><aside class="sidebar right-sidebar sticky"><section class="widget archives"><div class=widget-icon><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="11" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="13" y2="20"/></svg></div><h2 class="widget-title section-title">目录</h2><div class=widget--toc><nav id=TableOfContents><ol><li><a href=#读写锁引入>读写锁引入</a></li><li><a href=#读写锁底层>读写锁底层</a><ol><li><a href=#读锁逻辑>读锁逻辑</a></li><li><a href=#写锁逻辑>写锁逻辑</a></li></ol></li><li><a href=#总结>总结</a></li><li><a href=#参考>参考</a></li></ol></nav></div></section></aside><main class="main full-width"><article class="has-image main-article"><header class=article-header><div class=article-image><a href=/blog/p/golang-rwmutex-deadlock/><img src=/blog/p/golang-rwmutex-deadlock/daedlock_hu26d071d1a9c611a8342c73b77f908c12_41977_800x0_resize_q75_box.jpeg srcset="/blog/p/golang-rwmutex-deadlock/daedlock_hu26d071d1a9c611a8342c73b77f908c12_41977_800x0_resize_q75_box.jpeg 800w, /blog/p/golang-rwmutex-deadlock/daedlock_hu26d071d1a9c611a8342c73b77f908c12_41977_1600x0_resize_q75_box.jpeg 1600w" width=800 height=370 loading=lazy alt="Featured image of post GO RWMutex 中隐藏的死锁问题"></a></div><div class=article-details><header class=article-category><a href=/blog/categories/golang/>golang</a></header><div class=article-title-wrapper><h2 class=article-title><a href=/blog/p/golang-rwmutex-deadlock/>GO RWMutex 中隐藏的死锁问题</a></h2><h3 class=article-subtitle>从一个面试题开始深入了解 RWMutex 使用不当会导致死锁问题</h3></div><footer class=article-time><div><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><path d="M11.795 21H5a2 2 0 01-2-2V7a2 2 0 012-2h12a2 2 0 012 2v4"/><circle cx="18" cy="18" r="4"/><path d="M15 3v4"/><path d="M7 3v4"/><path d="M3 11h16"/><path d="M18 16.496V18l1 1"/></svg><time class=article-time--published>Nov 09, 2021</time></div><div><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg><time class=article-time--reading>阅读时长: 4 分钟</time></div></footer></div></header><section class=article-content><h2 id=读写锁引入>读写锁引入</h2><p>有下面一段程序，面试官问这段程序有什么问题？</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>type Store struct {
+</span></span><span class=line><span class=cl>    a string
+</span></span><span class=line><span class=cl>    b string
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>    sync.RWMutex
+</span></span><span class=line><span class=cl>}
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>func (s *Store) GetA() string {
+</span></span><span class=line><span class=cl>    fmt.Println(&#34;get a&#34;)
+</span></span><span class=line><span class=cl>    s.RLock()
+</span></span><span class=line><span class=cl>    fmt.Println(&#34;get a2&#34;)
+</span></span><span class=line><span class=cl>    defer s.RUnlock()
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>    return s.a
+</span></span><span class=line><span class=cl>}
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>func (s *Store) GetAB() (string, string) {
+</span></span><span class=line><span class=cl>    fmt.Println(&#34;get ab&#34;)
+</span></span><span class=line><span class=cl>    s.RLock()
+</span></span><span class=line><span class=cl>    fmt.Println(&#34;get ab2&#34;)
+</span></span><span class=line><span class=cl>    defer s.RUnlock()
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>    return s.GetA(), s.b
+</span></span><span class=line><span class=cl>}
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>func (s *Store) Write(a, b string) {
+</span></span><span class=line><span class=cl>    fmt.Println(&#34;write&#34;)
+</span></span><span class=line><span class=cl>    s.Lock()
+</span></span><span class=line><span class=cl>    defer s.Unlock()
+</span></span><span class=line><span class=cl>    fmt.Println(&#34;write2&#34;)
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>    s.a = a
+</span></span><span class=line><span class=cl>    s.b = b
+</span></span><span class=line><span class=cl>}
+</span></span></code></pre></td></tr></table></div></div><ol><li>看到这段程序程序，首先想到的是读写锁的问题；</li><li>其次，看 Store 这个结构体，各个函数都定义的是指针函数。那就说明：不存在读写锁的 copy 过程；</li><li>GetAB 方法中通过调用 GetA 方法，在 <code>s.RUnlock</code> 前通过调用 <code>s.GetA</code>，又做了一次读写锁上锁 <code>s.RLock</code>，但是读锁可以多次上锁，所以单看这里没什么问题；</li><li>然后，想到会不会 <code>Write</code> 和 <code>GetAB</code> 并发调用的时候会存在问题呢？思考了一会，觉得没问题，就放弃了。</li></ol><p>以上，是面试时整个思路。</p><p>回头，越想越觉得这里哪里有问题，就在<code>夜读群</code>里求教了一下，群里大神发了一篇<a class=link href=https://blog.csdn.net/xyz347/article/details/83902123 target=_blank rel=noopener>读写锁优先级的文章</a>，然后给了一段测试样例，瞬间豁然开朗。</p><p>main函数逻辑如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>func main() {
+</span></span><span class=line><span class=cl>    store := Store{}
+</span></span><span class=line><span class=cl>    wg := sync.WaitGroup{}
+</span></span><span class=line><span class=cl>    wg.Add(2)
+</span></span><span class=line><span class=cl>    go func() {
+</span></span><span class=line><span class=cl>        defer wg.Done()
+</span></span><span class=line><span class=cl>        for i := 1; i &lt; 10000; i += 1 {
+</span></span><span class=line><span class=cl>            fmt.Println(&#34;main write &#34;, i)
+</span></span><span class=line><span class=cl>            store.Write(&#34;111&#34;, &#34;1111&#34;)
+</span></span><span class=line><span class=cl>        }
+</span></span><span class=line><span class=cl>    }()
+</span></span><span class=line><span class=cl>    go func() {
+</span></span><span class=line><span class=cl>        defer wg.Done()
+</span></span><span class=line><span class=cl>        for i := 1; i &lt; 10000; i += 1 {
+</span></span><span class=line><span class=cl>            fmt.Println(&#34;main get ab&#34;, i)
+</span></span><span class=line><span class=cl>            store.GetAB()
+</span></span><span class=line><span class=cl>        }
+</span></span><span class=line><span class=cl>    }()
+</span></span><span class=line><span class=cl>    wg.Wait()
+</span></span><span class=line><span class=cl>}
+</span></span></code></pre></td></tr></table></div></div><p>执行结果</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>main get ab 12  //main函数读取ab
+</span></span><span class=line><span class=cl>get ab          //进入 s.GetAB 函数
+</span></span><span class=line><span class=cl>main write  1   //main 函数写数据
+</span></span><span class=line><span class=cl>write           //进入 s.Write 函数
+</span></span><span class=line><span class=cl>write2          //获取写锁
+</span></span><span class=line><span class=cl>main write  2
+</span></span><span class=line><span class=cl>....            //写锁一直抢占
+</span></span><span class=line><span class=cl>....
+</span></span><span class=line><span class=cl>main write  13  //main 函数写数据
+</span></span><span class=line><span class=cl>write           //进入 s.Write 函数
+</span></span><span class=line><span class=cl>write2          //获取写锁
+</span></span><span class=line><span class=cl>main write  14  
+</span></span><span class=line><span class=cl>write
+</span></span><span class=line><span class=cl>write2
+</span></span><span class=line><span class=cl>get ab2         //之前 get ab 12 才获得读锁
+</span></span><span class=line><span class=cl>get a           //进入 GetA 
+</span></span><span class=line><span class=cl>get a2          //获取读锁
+</span></span><span class=line><span class=cl>main get ab 13  //main函数 get ab
+</span></span><span class=line><span class=cl>get ab          //进入 s.GetAB 函数
+</span></span><span class=line><span class=cl>get ab2         //获取读锁
+</span></span><span class=line><span class=cl>main write  15  //注意⚠️ 这个时候写数据开始了
+</span></span><span class=line><span class=cl>write           //进入 Write 函数，后面尝试获取写锁
+</span></span><span class=line><span class=cl>get a           //这个时候 GetAB 进入了 GetA，尝试获取读锁
+</span></span><span class=line><span class=cl>fatal error: all goroutines are asleep - deadlock!  //出现了死锁
+</span></span></code></pre></td></tr></table></div></div><p>分析：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>    GetAB       |            GetA               |                Write
+</span></span><span class=line><span class=cl>                |                               |
+</span></span><span class=line><span class=cl>r0 占用读锁      |                               |
+</span></span><span class=line><span class=cl>                |                               |    w0 尝试获取写锁 等待r0释放读锁
+</span></span><span class=line><span class=cl>                |   r1 尝试获取读锁，排在w0后面     |
+</span></span></code></pre></td></tr></table></div></div><p>由于读写锁的优先级，读锁和写锁同时竞争时，读锁要排在写锁后面，导致了 r1 竞争 w0的锁，w0竞争r0，r0执行不下去，最后死锁。</p><h2 id=读写锁底层>读写锁底层</h2><p>读写锁前置条件：</p><ol><li>读写互斥，但是读读不互斥；</li><li>读、写锁都不会出现饥饿；</li><li>保证读上锁数量与解锁数量一致；</li></ol><p>可以思考下，如果让你设计一个这样的锁，你会怎么设计？</p><hr><p>go中读写锁的结构，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>type RWMutex struct {
+</span></span><span class=line><span class=cl>    w           Mutex  // 用来保证同一时间只有一个写锁能够抢到锁
+</span></span><span class=line><span class=cl>    writerSem   uint32 // 写锁信号量，在读锁全部解锁时通知阻塞的写锁
+</span></span><span class=line><span class=cl>    readerSem   uint32 // 读锁信号量，在写锁解锁时通知阻塞的读操作
+</span></span><span class=line><span class=cl>    readerCount int32  // 等待、已上锁的读锁数量
+</span></span><span class=line><span class=cl>    readerWait  int32  // 写锁获得锁前，已经上锁的读锁数量
+</span></span><span class=line><span class=cl>}
+</span></span></code></pre></td></tr></table></div></div><h3 id=读锁逻辑>读锁逻辑</h3><p>首先，看一下读上锁逻辑：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>func (rw *RWMutex) RLock() {
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>    if atomic.AddInt32(&amp;rw.readerCount, 1) &lt; 0 {
+</span></span><span class=line><span class=cl>        // A writer is pending, wait for it.
+</span></span><span class=line><span class=cl>        runtime_SemacquireMutex(&amp;rw.readerSem, false)
+</span></span><span class=line><span class=cl>    }
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>}
+</span></span></code></pre></td></tr></table></div></div><p>上面，上读锁逻辑获试图获取读锁数量原子性加一： <code>atomic.AddInt32(&rw.readerCount, 1)</code>。自增操作返回值如果小于0，则阻塞等待信号量 <code>readerSem</code> 唤醒。</p><p>疑问：</p><ol><li>什么情况下 <code>readerCount</code> 小于0；</li><li><code>runtime_SemacquireMutex</code> 不会造成读读互斥么？</li><li>如何保证读、写互斥？</li></ol><p>再来看一下，读解锁逻辑：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>func (rw *RWMutex) RUnlock() {
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>    if r := atomic.AddInt32(&amp;rw.readerCount, -1); r &lt; 0 { 
+</span></span><span class=line><span class=cl>        if r+1 == 0 || r+1 == -rwmutexMaxReaders {
+</span></span><span class=line><span class=cl>            race.Enable()
+</span></span><span class=line><span class=cl>            throw(&#34;sync: RUnlock of unlocked RWMutex&#34;)
+</span></span><span class=line><span class=cl>        }
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>        // A writer is pending.
+</span></span><span class=line><span class=cl>        if atomic.AddInt32(&amp;rw.readerWait, -1) == 0 {
+</span></span><span class=line><span class=cl>            // The last reader unblocks the writer.
+</span></span><span class=line><span class=cl>            runtime_Semrelease(&amp;rw.writerSem, false)
+</span></span><span class=line><span class=cl>        }
+</span></span><span class=line><span class=cl>    }
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>}
+</span></span></code></pre></td></tr></table></div></div><p>解锁逻辑：先对 <code>atomic.AddInt32(&rw.readerCount, -1)</code> 进行原子性减一操作。</p><ul><li>r大于 0 ：直接释放锁完成；</li><li>r小于 0 ：进行读锁数量一致性判断，<code>atomic.AddInt32(&rw.readerWait, -1)</code> 针对 <code>readerWait</code> 原子性减一后判断是否为 0，为 0 则唤起写锁信号量；</li></ul><p>与读加锁类似，同样有 <code>atomic.AddInt32(&rw.readerCount, -1)</code> 小于 0 判断。可以有结论 <code>rw.readerCount</code> 小于 0，为写锁上锁的充要条件，后面分析写锁时进行验证。</p><p>解决了的问题：</p><ol><li>释放读锁，读锁全部释放后唤起写锁；</li><li>上锁与解锁数量一致性保证；</li></ol><p>疑问：</p><ol><li><code>readerCount</code> 修改成一个负数？如何保证这个负数足够小呢？</li></ol><h3 id=写锁逻辑>写锁逻辑</h3><p>先上代码：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>func (rw *RWMutex) Lock() {
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>    // First, resolve competition with other writers.
+</span></span><span class=line><span class=cl>    rw.w.Lock()
+</span></span><span class=line><span class=cl>    // Announce to readers there is a pending writer.
+</span></span><span class=line><span class=cl>    r := atomic.AddInt32(&amp;rw.readerCount, -rwmutexMaxReaders) + rwmutexMaxReaders
+</span></span><span class=line><span class=cl>    // Wait for active readers.
+</span></span><span class=line><span class=cl>    if r != 0 &amp;&amp; atomic.AddInt32(&amp;rw.readerWait, r) != 0 {
+</span></span><span class=line><span class=cl>        runtime_SemacquireMutex(&amp;rw.writerSem, false)
+</span></span><span class=line><span class=cl>    }
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>}
+</span></span></code></pre></td></tr></table></div></div><p>写上锁逻辑：</p><ol><li>首先，互斥量上锁，保证只有一个写锁加锁成功。</li><li>然后，令 <code>readerCount</code> 原子性减去 <code>rwmutexMaxReaders</code>（这是个常量，具体定义 <code>const rwmutexMaxReaders = 1 &lt;&lt; 30</code>）。这里可以验证之前猜想，<code>rw.readerCount</code> 小于0，是持有锁的充要条件。<ul><li><code>atomic.AddInt32(&rw.readerCount, -rwmutexMaxReaders) + rwmutexMaxReaders</code> 返回结果是在写锁获取前，已持有读锁的数量 r。<ul><li>r=0，说明没有读锁；</li><li>r&lt;0，只有在<code>读解锁数量>读加锁数量</code>，或写锁多次时发生；第一个情况，读解锁会 <code>check</code>；第二种情况，<code>mutex</code> 保证同时只有一个写锁；</li><li>r>0，存在读锁；</li></ul></li></ul></li><li>再进行 r!=0 判断（即存在读锁）。原子性操作 <code>atomic.AddInt32(&rw.readerWait, r)</code>，记录需要等待的读锁数量，然后等待<code>writerSem</code>唤醒。</li></ol><p>最终，保证：1. 写锁唯一性；2. 等待读锁完全释放；3. 阻塞后面读锁的获取；</p><p>再来看一下，写锁解锁逻辑：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-fallback data-lang=fallback><span class=line><span class=cl>func (rw *RWMutex) Unlock() {
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>    // Announce to readers there is no active writer.
+</span></span><span class=line><span class=cl>    r := atomic.AddInt32(&amp;rw.readerCount, rwmutexMaxReaders)
+</span></span><span class=line><span class=cl>    if r &gt;= rwmutexMaxReaders {
+</span></span><span class=line><span class=cl>        race.Enable()
+</span></span><span class=line><span class=cl>        throw(&#34;sync: Unlock of unlocked RWMutex&#34;)
+</span></span><span class=line><span class=cl>    }
+</span></span><span class=line><span class=cl>    // Unblock blocked readers, if any.
+</span></span><span class=line><span class=cl>    for i := 0; i &lt; int(r); i++ {
+</span></span><span class=line><span class=cl>        runtime_Semrelease(&amp;rw.readerSem, false)
+</span></span><span class=line><span class=cl>    }
+</span></span><span class=line><span class=cl>    // Allow other writers to proceed.
+</span></span><span class=line><span class=cl>    rw.w.Unlock()
+</span></span><span class=line><span class=cl>    ...
+</span></span><span class=line><span class=cl>}
+</span></span></code></pre></td></tr></table></div></div><p>解锁逻辑：</p><ol><li>原子性操作 <code>atomic.AddInt32(&rw.readerCount, rwmutexMaxReaders)</code>。这里，能够看到两个隐含的点：<ul><li>原子操作结束后，如果有其他读锁试图获取读锁，不需要阻塞；</li><li>这个时候其他线程还是不能够获取写锁；</li><li>即：<code>写锁释放锁时，读锁要比写锁优先级高</code>；</li></ul></li><li>原子操作返回值，是当前读锁数量。包括在写锁前读锁（写锁未完全获得情况下写锁解锁），和写锁后阻塞读锁；然后 <code>runtime_Semrelease</code> 唤起阻塞着的读锁。<ul><li><code>runtime_Semrelease > runtime_SemacquireMutex</code> 会不会存在问题？验证过不会。</li></ul></li><li>然后写锁释放；</li></ol><h2 id=总结>总结</h2><p>通过分析，可以得出结论：</p><ol><li>写锁释放过程中，读锁优先级要高于写锁；</li><li>读锁加锁后，写锁可以进入加锁过程，但是要等待之前读锁释放；即，并不少写锁优先级高于写锁，而是在<code>读锁已经上锁，或没有持有读写锁的协程</code>条件下，读写锁都有机会获取锁；</li></ol><p>所以，针对之前的面试题，读锁嵌套读锁，在有写锁的时候，依据结论2会发生死锁。</p><p>通过上面分析，存在待验证问题：</p><ol><li><p><code>一个协程个已获取读锁，另个协程试图获取写锁，还有一个协程在完全获取写锁前调用Unlock，再一个协程释放读锁，按顺序进行流程</code>。会发生死锁具体可以自己分析（写锁信号量永远阻塞）；</p></li><li><p><code>一个协程已上写锁锁，一个协程试图获取读锁，然后另一个协程释放读锁，最后一个协程释放写锁</code>，同样会发生死锁（读信号量永远阻塞）；</p></li></ol><p>在以后用锁的时候不管有没有优先级，都要时刻记住死锁的四个必要条件：</p><ol><li>互斥条件：一个资源每次只能被一个进程使用。</li><li>锁的不可抢占：进程已获得的资源，在末使用完之前，不能强行剥夺。</li><li>占有且等待：一个进程因请求资源而阻塞时，对已获得的资源保持不放。</li><li>循环等待条件: 若干进程之间形成一种头尾相接的循环等待资源关系。</li></ol><h2 id=参考>参考</h2><ul><li>[sync.RWMutex]https://medium.com/golangspec/sync-rwmutex-ca6c6c3208a0</li></ul></section><footer class=article-footer><section class=article-copyright><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentcolor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="12" r="9"/><path d="M14.5 9a3.5 4 0 100 6"/></svg><span>Licensed under CC BY-NC-SA 4.0</span></section></footer></article><div class=disqus-container><div id=disqus_thread></div><script type=application/javascript>window.disqus_config=function(){},function(){if(["localhost","127.0.0.1"].indexOf(window.location.hostname)!=-1){document.getElementById("disqus_thread").innerHTML="Disqus comments not available by default when the website is previewed locally.";return}var t=document,e=t.createElement("script");e.async=!0,e.src="//hugo-theme-stack.disqus.com/embed.js",e.setAttribute("data-timestamp",+new Date),(t.head||t.body).appendChild(e)}()</script><noscript>Please enable JavaScript to view the <a href=https://disqus.com/?ref_noscript>comments powered by Disqus.</a></noscript><a href=https://disqus.com class=dsq-brlink>comments powered by <span class=logo-disqus>Disqus</span></a></div><style>.disqus-container{background-color:var(--card-background);border-radius:var(--card-border-radius);box-shadow:var(--shadow-l1);padding:var(--card-padding)}</style><script>window.addEventListener("onColorSchemeChange",e=>{typeof DISQUS=="object"&&DISQUS.reset({reload:!0})})</script><footer class=site-footer><section class=copyright>&copy;
+2020 -
+2023 jason's 博客</section><section class=powerby>Built with <a href=https://gohugo.io/ target=_blank rel=noopener>Hugo</a><br>主题 <b><a href=https://github.com/CaiJimmy/hugo-theme-stack target=_blank rel=noopener data-version=3.16.0>Stack</a></b> 由 <a href=https://jimmycai.com target=_blank rel=noopener>Jimmy</a> 设计</section></footer><div class=pswp tabindex=-1 role=dialog aria-hidden=true><div class=pswp__bg></div><div class=pswp__scroll-wrap><div class=pswp__container><div class=pswp__item></div><div class=pswp__item></div><div class=pswp__item></div></div><div class="pswp__ui pswp__ui--hidden"><div class=pswp__top-bar><div class=pswp__counter></div><button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+<button class="pswp__button pswp__button--share" title=Share></button>
+<button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+<button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button><div class=pswp__preloader><div class=pswp__preloader__icn><div class=pswp__preloader__cut><div class=pswp__preloader__donut></div></div></div></div></div><div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap"><div class=pswp__share-tooltip></div></div><button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)"></button>
+<button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)"></button><div class=pswp__caption><div class=pswp__caption__center></div></div></div></div></div><script src=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo=" crossorigin=anonymous defer></script><script src=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU=" crossorigin=anonymous defer></script><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css crossorigin=anonymous><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css crossorigin=anonymous></main></div><script src=https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z+KMkF24hUW8WePSA9HM=" crossorigin=anonymous></script><script type=text/javascript src=/blog/ts/main.js defer></script>
+<script>(function(){const e=document.createElement("link");e.href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap",e.type="text/css",e.rel="stylesheet",document.head.appendChild(e)})()</script></body></html>

@@ -1,0 +1,453 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>golang on jason's 博客</title><link>https://jasonrd.github.io/blog/categories/golang/</link><description>Recent content in golang on jason's 博客</description><generator>Hugo -- gohugo.io</generator><language>en</language><lastBuildDate>Tue, 09 Nov 2021 00:00:00 +0000</lastBuildDate><atom:link href="https://jasonrd.github.io/blog/categories/golang/index.xml" rel="self" type="application/rss+xml"/><item><title>GO RWMutex 中隐藏的死锁问题</title><link>https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/</link><pubDate>Tue, 09 Nov 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/daedlock.jpeg" alt="Featured image of post GO RWMutex 中隐藏的死锁问题" />&lt;h2 id="读写锁引入">读写锁引入&lt;/h2>
+&lt;p>有下面一段程序，面试官问这段程序有什么问题？&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">type Store struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> a string
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> b string
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> sync.RWMutex
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (s *Store) GetA() string {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;get a&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.RLock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;get a2&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer s.RUnlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return s.a
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (s *Store) GetAB() (string, string) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;get ab&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.RLock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;get ab2&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer s.RUnlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> return s.GetA(), s.b
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">func (s *Store) Write(a, b string) {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;write&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer s.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;write2&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.a = a
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> s.b = b
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;ol>
+&lt;li>看到这段程序程序，首先想到的是读写锁的问题；&lt;/li>
+&lt;li>其次，看 Store 这个结构体，各个函数都定义的是指针函数。那就说明：不存在读写锁的 copy 过程；&lt;/li>
+&lt;li>GetAB 方法中通过调用 GetA 方法，在 &lt;code>s.RUnlock&lt;/code> 前通过调用 &lt;code>s.GetA&lt;/code>，又做了一次读写锁上锁 &lt;code>s.RLock&lt;/code>，但是读锁可以多次上锁，所以单看这里没什么问题；&lt;/li>
+&lt;li>然后，想到会不会 &lt;code>Write&lt;/code> 和 &lt;code>GetAB&lt;/code> 并发调用的时候会存在问题呢？思考了一会，觉得没问题，就放弃了。&lt;/li>
+&lt;/ol>
+&lt;p>以上，是面试时整个思路。&lt;/p>
+&lt;p>回头，越想越觉得这里哪里有问题，就在&lt;code>夜读群&lt;/code>里求教了一下，群里大神发了一篇&lt;a class="link" href="https://blog.csdn.net/xyz347/article/details/83902123" target="_blank" rel="noopener"
+>读写锁优先级的文章&lt;/a>，然后给了一段测试样例，瞬间豁然开朗。&lt;/p>
+&lt;p>main函数逻辑如下：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func main() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> store := Store{}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wg := sync.WaitGroup{}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wg.Add(2)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> go func() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer wg.Done()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for i := 1; i &amp;lt; 10000; i += 1 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;main write &amp;#34;, i)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> store.Write(&amp;#34;111&amp;#34;, &amp;#34;1111&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> go func() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> defer wg.Done()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for i := 1; i &amp;lt; 10000; i += 1 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> fmt.Println(&amp;#34;main get ab&amp;#34;, i)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> store.GetAB()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> wg.Wait()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>执行结果&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">main get ab 12 //main函数读取ab
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">get ab //进入 s.GetAB 函数
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">main write 1 //main 函数写数据
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">write //进入 s.Write 函数
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">write2 //获取写锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">main write 2
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">.... //写锁一直抢占
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">....
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">main write 13 //main 函数写数据
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">write //进入 s.Write 函数
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">write2 //获取写锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">main write 14
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">write
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">write2
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">get ab2 //之前 get ab 12 才获得读锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">get a //进入 GetA
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">get a2 //获取读锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">main get ab 13 //main函数 get ab
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">get ab //进入 s.GetAB 函数
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">get ab2 //获取读锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">main write 15 //注意⚠️ 这个时候写数据开始了
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">write //进入 Write 函数，后面尝试获取写锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">get a //这个时候 GetAB 进入了 GetA，尝试获取读锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">fatal error: all goroutines are asleep - deadlock! //出现了死锁
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>分析：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;span class="lnt">6
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> GetAB | GetA | Write
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> | |
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">r0 占用读锁 | |
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> | | w0 尝试获取写锁 等待r0释放读锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> | r1 尝试获取读锁，排在w0后面 |
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>由于读写锁的优先级，读锁和写锁同时竞争时，读锁要排在写锁后面，导致了 r1 竞争 w0的锁，w0竞争r0，r0执行不下去，最后死锁。&lt;/p>
+&lt;h2 id="读写锁底层">读写锁底层&lt;/h2>
+&lt;p>读写锁前置条件：&lt;/p>
+&lt;ol>
+&lt;li>读写互斥，但是读读不互斥；&lt;/li>
+&lt;li>读、写锁都不会出现饥饿；&lt;/li>
+&lt;li>保证读上锁数量与解锁数量一致；&lt;/li>
+&lt;/ol>
+&lt;p>可以思考下，如果让你设计一个这样的锁，你会怎么设计？&lt;/p>
+&lt;hr>
+&lt;p>go中读写锁的结构，如下：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;span class="lnt">6
+&lt;/span>&lt;span class="lnt">7
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">type RWMutex struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> w Mutex // 用来保证同一时间只有一个写锁能够抢到锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> writerSem uint32 // 写锁信号量，在读锁全部解锁时通知阻塞的写锁
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> readerSem uint32 // 读锁信号量，在写锁解锁时通知阻塞的读操作
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> readerCount int32 // 等待、已上锁的读锁数量
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> readerWait int32 // 写锁获得锁前，已经上锁的读锁数量
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;h3 id="读锁逻辑">读锁逻辑&lt;/h3>
+&lt;p>首先，看一下读上锁逻辑：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;span class="lnt">2
+&lt;/span>&lt;span class="lnt">3
+&lt;/span>&lt;span class="lnt">4
+&lt;/span>&lt;span class="lnt">5
+&lt;/span>&lt;span class="lnt">6
+&lt;/span>&lt;span class="lnt">7
+&lt;/span>&lt;span class="lnt">8
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (rw *RWMutex) RLock() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if atomic.AddInt32(&amp;amp;rw.readerCount, 1) &amp;lt; 0 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // A writer is pending, wait for it.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> runtime_SemacquireMutex(&amp;amp;rw.readerSem, false)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>上面，上读锁逻辑获试图获取读锁数量原子性加一： &lt;code>atomic.AddInt32(&amp;amp;rw.readerCount, 1)&lt;/code>。自增操作返回值如果小于0，则阻塞等待信号量 &lt;code>readerSem&lt;/code> 唤醒。&lt;/p>
+&lt;p>疑问：&lt;/p>
+&lt;ol>
+&lt;li>什么情况下 &lt;code>readerCount&lt;/code> 小于0；&lt;/li>
+&lt;li>&lt;code>runtime_SemacquireMutex&lt;/code> 不会造成读读互斥么？&lt;/li>
+&lt;li>如何保证读、写互斥？&lt;/li>
+&lt;/ol>
+&lt;p>再来看一下，读解锁逻辑：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (rw *RWMutex) RUnlock() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if r := atomic.AddInt32(&amp;amp;rw.readerCount, -1); r &amp;lt; 0 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if r+1 == 0 || r+1 == -rwmutexMaxReaders {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> race.Enable()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> throw(&amp;#34;sync: RUnlock of unlocked RWMutex&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // A writer is pending.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if atomic.AddInt32(&amp;amp;rw.readerWait, -1) == 0 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // The last reader unblocks the writer.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> runtime_Semrelease(&amp;amp;rw.writerSem, false)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>解锁逻辑：先对 &lt;code>atomic.AddInt32(&amp;amp;rw.readerCount, -1)&lt;/code> 进行原子性减一操作。&lt;/p>
+&lt;ul>
+&lt;li>r大于 0 ：直接释放锁完成；&lt;/li>
+&lt;li>r小于 0 ：进行读锁数量一致性判断，&lt;code>atomic.AddInt32(&amp;amp;rw.readerWait, -1)&lt;/code> 针对 &lt;code>readerWait&lt;/code> 原子性减一后判断是否为 0，为 0 则唤起写锁信号量；&lt;/li>
+&lt;/ul>
+&lt;p>与读加锁类似，同样有 &lt;code>atomic.AddInt32(&amp;amp;rw.readerCount, -1)&lt;/code> 小于 0 判断。可以有结论 &lt;code>rw.readerCount&lt;/code> 小于 0，为写锁上锁的充要条件，后面分析写锁时进行验证。&lt;/p>
+&lt;p>解决了的问题：&lt;/p>
+&lt;ol>
+&lt;li>释放读锁，读锁全部释放后唤起写锁；&lt;/li>
+&lt;li>上锁与解锁数量一致性保证；&lt;/li>
+&lt;/ol>
+&lt;p>疑问：&lt;/p>
+&lt;ol>
+&lt;li>&lt;code>readerCount&lt;/code> 修改成一个负数？如何保证这个负数足够小呢？&lt;/li>
+&lt;/ol>
+&lt;h3 id="写锁逻辑">写锁逻辑&lt;/h3>
+&lt;p>先上代码：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (rw *RWMutex) Lock() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // First, resolve competition with other writers.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> rw.w.Lock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // Announce to readers there is a pending writer.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> r := atomic.AddInt32(&amp;amp;rw.readerCount, -rwmutexMaxReaders) + rwmutexMaxReaders
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // Wait for active readers.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if r != 0 &amp;amp;&amp;amp; atomic.AddInt32(&amp;amp;rw.readerWait, r) != 0 {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> runtime_SemacquireMutex(&amp;amp;rw.writerSem, false)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>写上锁逻辑：&lt;/p>
+&lt;ol>
+&lt;li>首先，互斥量上锁，保证只有一个写锁加锁成功。&lt;/li>
+&lt;li>然后，令 &lt;code>readerCount&lt;/code> 原子性减去 &lt;code>rwmutexMaxReaders&lt;/code>（这是个常量，具体定义 &lt;code>const rwmutexMaxReaders = 1 &amp;lt;&amp;lt; 30&lt;/code>）。这里可以验证之前猜想，&lt;code>rw.readerCount&lt;/code> 小于0，是持有锁的充要条件。
+&lt;ul>
+&lt;li>&lt;code>atomic.AddInt32(&amp;amp;rw.readerCount, -rwmutexMaxReaders) + rwmutexMaxReaders&lt;/code> 返回结果是在写锁获取前，已持有读锁的数量 r。
+&lt;ul>
+&lt;li>r=0，说明没有读锁；&lt;/li>
+&lt;li>r&amp;lt;0，只有在&lt;code>读解锁数量&amp;gt;读加锁数量&lt;/code>，或写锁多次时发生；第一个情况，读解锁会 &lt;code>check&lt;/code>；第二种情况，&lt;code>mutex&lt;/code> 保证同时只有一个写锁；&lt;/li>
+&lt;li>r&amp;gt;0，存在读锁；&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>再进行 r!=0 判断（即存在读锁）。原子性操作 &lt;code>atomic.AddInt32(&amp;amp;rw.readerWait, r)&lt;/code>，记录需要等待的读锁数量，然后等待&lt;code>writerSem&lt;/code>唤醒。&lt;/li>
+&lt;/ol>
+&lt;p>最终，保证：1. 写锁唯一性；2. 等待读锁完全释放；3. 阻塞后面读锁的获取；&lt;/p>
+&lt;p>再来看一下，写锁解锁逻辑：&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">func (rw *RWMutex) Unlock() {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // Announce to readers there is no active writer.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> r := atomic.AddInt32(&amp;amp;rw.readerCount, rwmutexMaxReaders)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> if r &amp;gt;= rwmutexMaxReaders {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> race.Enable()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> throw(&amp;#34;sync: Unlock of unlocked RWMutex&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // Unblock blocked readers, if any.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> for i := 0; i &amp;lt; int(r); i++ {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> runtime_Semrelease(&amp;amp;rw.readerSem, false)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // Allow other writers to proceed.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> rw.w.Unlock()
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ...
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>解锁逻辑：&lt;/p>
+&lt;ol>
+&lt;li>原子性操作 &lt;code>atomic.AddInt32(&amp;amp;rw.readerCount, rwmutexMaxReaders)&lt;/code>。这里，能够看到两个隐含的点：
+&lt;ul>
+&lt;li>原子操作结束后，如果有其他读锁试图获取读锁，不需要阻塞；&lt;/li>
+&lt;li>这个时候其他线程还是不能够获取写锁；&lt;/li>
+&lt;li>即：&lt;code>写锁释放锁时，读锁要比写锁优先级高&lt;/code>；&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>原子操作返回值，是当前读锁数量。包括在写锁前读锁（写锁未完全获得情况下写锁解锁），和写锁后阻塞读锁；然后 &lt;code>runtime_Semrelease&lt;/code> 唤起阻塞着的读锁。
+&lt;ul>
+&lt;li>&lt;code>runtime_Semrelease &amp;gt; runtime_SemacquireMutex&lt;/code> 会不会存在问题？验证过不会。&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>然后写锁释放；&lt;/li>
+&lt;/ol>
+&lt;h2 id="总结">总结&lt;/h2>
+&lt;p>通过分析，可以得出结论：&lt;/p>
+&lt;ol>
+&lt;li>写锁释放过程中，读锁优先级要高于写锁；&lt;/li>
+&lt;li>读锁加锁后，写锁可以进入加锁过程，但是要等待之前读锁释放；即，并不少写锁优先级高于写锁，而是在&lt;code>读锁已经上锁，或没有持有读写锁的协程&lt;/code>条件下，读写锁都有机会获取锁；&lt;/li>
+&lt;/ol>
+&lt;p>所以，针对之前的面试题，读锁嵌套读锁，在有写锁的时候，依据结论2会发生死锁。&lt;/p>
+&lt;p>通过上面分析，存在待验证问题：&lt;/p>
+&lt;ol>
+&lt;li>
+&lt;p>&lt;code>一个协程个已获取读锁，另个协程试图获取写锁，还有一个协程在完全获取写锁前调用Unlock，再一个协程释放读锁，按顺序进行流程&lt;/code>。会发生死锁具体可以自己分析（写锁信号量永远阻塞）；&lt;/p>
+&lt;/li>
+&lt;li>
+&lt;p>&lt;code>一个协程已上写锁锁，一个协程试图获取读锁，然后另一个协程释放读锁，最后一个协程释放写锁&lt;/code>，同样会发生死锁（读信号量永远阻塞）；&lt;/p>
+&lt;/li>
+&lt;/ol>
+&lt;p>在以后用锁的时候不管有没有优先级，都要时刻记住死锁的四个必要条件：&lt;/p>
+&lt;ol>
+&lt;li>互斥条件：一个资源每次只能被一个进程使用。&lt;/li>
+&lt;li>锁的不可抢占：进程已获得的资源，在末使用完之前，不能强行剥夺。&lt;/li>
+&lt;li>占有且等待：一个进程因请求资源而阻塞时，对已获得的资源保持不放。&lt;/li>
+&lt;li>循环等待条件: 若干进程之间形成一种头尾相接的循环等待资源关系。&lt;/li>
+&lt;/ol>
+&lt;h2 id="参考">参考&lt;/h2>
+&lt;ul>
+&lt;li>[sync.RWMutex]https://medium.com/golangspec/sync-rwmutex-ca6c6c3208a0&lt;/li>
+&lt;/ul></description></item></channel></rss>
