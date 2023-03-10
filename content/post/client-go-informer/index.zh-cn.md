@@ -6,7 +6,7 @@ slug: client-go-informer
 image: informer-arch.png
 categories:
     - kubernetes
-    - network
+    - client-go
 ---
 
 ## 使用套路
