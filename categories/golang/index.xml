@@ -1,4 +1,194 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>golang on jason's 博客</title><link>https://jasonrd.github.io/blog/categories/golang/</link><description>Recent content in golang on jason's 博客</description><generator>Hugo -- gohugo.io</generator><language>en</language><lastBuildDate>Tue, 09 Nov 2021 00:00:00 +0000</lastBuildDate><atom:link href="https://jasonrd.github.io/blog/categories/golang/index.xml" rel="self" type="application/rss+xml"/><item><title>GO RWMutex 中隐藏的死锁问题</title><link>https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/</link><pubDate>Tue, 09 Nov 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/daedlock.jpeg" alt="Featured image of post GO RWMutex 中隐藏的死锁问题" />&lt;h2 id="读写锁引入">读写锁引入&lt;/h2>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>golang on jason's 博客</title><link>https://jasonrd.github.io/blog/categories/golang/</link><description>Recent content in golang on jason's 博客</description><generator>Hugo -- gohugo.io</generator><language>en</language><lastBuildDate>Fri, 17 Dec 2021 00:00:00 +0000</lastBuildDate><atom:link href="https://jasonrd.github.io/blog/categories/golang/index.xml" rel="self" type="application/rss+xml"/><item><title>GO sync.map 探究</title><link>https://jasonrd.github.io/blog/p/golang-sync-map/</link><pubDate>Fri, 17 Dec 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/golang-sync-map/</guid><description>&lt;h2 id="背景">背景&lt;/h2>
+&lt;p>最近看到了一个文章[1]，其中提到了 sync.map 的一个bug，key 如果使用连接，会导致连接泄漏。文中提到了具体原因是 sync.map 对 key 删除是软删除，只是将 可以对应的 value 置为 nil，key 还会继续存在。&lt;/p>
+&lt;p>根据文章中描述，发现自己对 sync.Map 了解不够透彻，所以就打算进行一番了解。sync.Map 是 go 标准库中实现的线程安全的 Map，主要适用的场景：&lt;/p>
+&lt;blockquote>
+&lt;blockquote>
+&lt;p>The Map type is optimized for two common use cases:
+(1) when the entry for a given key is only ever written once but read many times, as in caches that only grow, or
+(2) when multiple goroutines read, write, and overwrite entries for disjoint sets of keys. In these two cases, use of a Map may significantly reduce lock contention compared to a Go map paired with a separate Mutex or RWMutex.&lt;/p>
+&lt;/blockquote>
+&lt;/blockquote>
+&lt;ol>
+&lt;li>同一个 key 读多写少；&lt;/li>
+&lt;li>并发读、写、覆盖不同 key；&lt;/li>
+&lt;/ol>
+&lt;p>其中，sync.Map 包中提到，在这两种场景中性能要优于使用 Map + Mutex。接下来我们看一下如何实现的，为什么在这两种场景下性能有优势。&lt;/p>
+&lt;h2 id="源码分析">源码分析&lt;/h2>
+&lt;h3 id="数据结构">数据结构&lt;/h3>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">type Map struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> mu Mutex
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 只读区，保存部分健值对
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 修改时进行原子性替换
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> read atomic.Value
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 新写入的健值对，先保存到 dirty 中
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 更新或者被删除的，dirty 中不会存储 expunged 健值对
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> dirty map[interface{}]*entry
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 记录 Load 出现多少次在 dirty 中读取健值对情况。
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> misses int
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// 存储 value 的指针
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">// key 被删除时通过 CAS 修改为 nil 或 expunged
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">type entry struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> p unsafe.Pointer // *interface{}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">type readOnly struct {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 存储的部分健值对，只会 m 中元素
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // 不会存在并发读写情况。
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> m map[interface{}]*entry
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> // dirty 中是否有 read.m 中不存在的健值对
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> amended bool // true if the dirty map contains some key not in m.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>sync.Map 中使用了两个 map 对象来尽量避免锁竞争，相当于增加一个缓冲。其中 read map 中记录部分健值对，dirty 中保存新写入的 value 和 read.m 中未被标记为 expunged 或 nil 的 entry。&lt;/p>
+&lt;h3 id="接口分析">接口分析&lt;/h3>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-store.jpg"
+width="1944"
+height="1380"
+srcset="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-store_hu2f1e02e515e351c311ec896043222feb_441700_480x0_resize_q75_box.jpg 480w, https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-store_hu2f1e02e515e351c311ec896043222feb_441700_1024x0_resize_q75_box.jpg 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="140"
+data-flex-basis="338px"
+>&lt;/p>
+&lt;h4 id="store-逻辑">Store 逻辑：&lt;/h4>
+&lt;ol>
+&lt;li>判断 read.m 中是否存在key。
+&lt;ul>
+&lt;li>如果存在进行尝试更新，会起一个循环不停尝试 CAS 更新，更新成功则返回。&lt;/li>
+&lt;li>如果read.m 中不存在 key，或者更新过程中发现 key 对应 entry 已被标记为 expunged，则进行第二步；&lt;/li>
+&lt;li>可以看出如果更新某个 key (已经在 read.m 中，并且未被删除) ，更新并不会加锁&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>加锁，再次判断 read.m 中是否存在
+&lt;ul>
+&lt;li>如果存在，然后判断之前 entry 是否为 expunged 状态，如果是（说明 dirty 中不存在 key），则把 key-entry 写入 dirty map 中；然后，原子更新 entry.p 指针。&lt;/li>
+&lt;li>否则进行第三步&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>dirty map 中是否存在 key，如果存在，则直接原子更新 entry.p 指针；否则，进行第四步；&lt;/li>
+&lt;li>read 和 dirty 中都不存在目标 key，则添加到 dirty 中。添加会做一些数据同步操作：
+&lt;ul>
+&lt;li>如果 read.m 不需要进行修正（ read.amended = false），则同步 read.m 中为被删除（enty.p!=nil or expunged）健值对到 dirty map 中。并通过 CAS 操作更新read.m 中被删除的 entry（enty.p = nil）标记为 expunged。&lt;/li>
+&lt;li>否则，直接添加到 dirty 中。&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ol>
+&lt;h4 id="load-逻辑">Load 逻辑&lt;/h4>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-load.jpg"
+width="1748"
+height="1098"
+srcset="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-load_hu2f1e02e515e351c311ec896043222feb_291641_480x0_resize_q75_box.jpg 480w, https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-load_hu2f1e02e515e351c311ec896043222feb_291641_1024x0_resize_q75_box.jpg 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="159"
+data-flex-basis="382px"
+>&lt;/p>
+&lt;ol>
+&lt;li>read.m 中是否存在，如果存在，判断是否已被删除，并返回相应状态；否则，进行下一步；&lt;/li>
+&lt;li>判断 read.amended 状态：
+&lt;ul>
+&lt;li>如果需要修正，进行加锁，然后再一次判断 read.m 和 read.amended，避免并发过程中 read 出现更新；&lt;/li>
+&lt;li>获取 dirty 中 key，并更新 miss 次数；如果 miss 次数达到 dirty.length，则更新read，并置 dirty=nil;&lt;/li>
+&lt;li>释放锁；&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>判断是否存在 key，或者是否被删除，进行相应返回&lt;/li>
+&lt;/ol>
+&lt;h4 id="delete-逻辑">Delete 逻辑&lt;/h4>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-delete.jpg"
+width="1006"
+height="1070"
+srcset="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-delete_hu2f1e02e515e351c311ec896043222feb_158336_480x0_resize_q75_box.jpg 480w, https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-delete_hu2f1e02e515e351c311ec896043222feb_158336_1024x0_resize_q75_box.jpg 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="94"
+data-flex-basis="225px"
+>&lt;/p>
+&lt;p>删除和 Load key 逻辑类似。&lt;/p>
+&lt;ol>
+&lt;li>首先，判断 read 中是否存在，如果存在，则标记 entry.p 为nil；如果不存在，继续判断 amended ；&lt;/li>
+&lt;li>加锁，进行二次判断，然后调用 delete 删除 dirty map 中 key；释放锁；&lt;/li>
+&lt;/ol>
+&lt;h2 id="总结">总结&lt;/h2>
+&lt;ol>
+&lt;li>read.m 中存在的 key 并非读写不会加锁，进行原子更新；所以，对于同一个 key 进行读写，具有较优的性能；&lt;/li>
+&lt;li>写入时，优先写入 dirty map，对于其他已经存在于 read.m 中的 key 读写并没有性能影响；&lt;/li>
+&lt;/ol>
+&lt;p>通过上面写入、删除、获取逻辑，可以看出：&lt;/p>
+&lt;ol>
+&lt;li>key 大部分是软删除，即标记 entry.p 为 nil 或 expunged。只有在&lt;code>删除-&amp;gt;新增-&amp;gt;读取-&amp;gt;(missed &amp;gt; dirty.length)-&amp;gt;修正read.m&lt;/code>情况会通过 GC 自动删除 key。&lt;/li>
+&lt;li>read.amended 标示存在某些 key 只存在 dirty 中；&lt;/li>
+&lt;li>read.m 更新是在 missed 次数达到阈值（dirty.length）时，直接进行原子覆盖。
+&lt;ul>
+&lt;li>为什么不 miss 一次进行一次更新？&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>dirty 为 nil 情况：未被使用的 map；miss 超过阈值时；&lt;/li>
+&lt;li>持有锁情况：修改 dirty、修正 read；&lt;/li>
+&lt;li>看代码时对 store 中判断，&lt;code>entry.unexpungeLocked&lt;/code> 时对 dirty 才写入 key。对这个逻辑有个疑问，为什么 entry 为 expunged 状态说明 dirty 不为 nil ，并且其中不存在该 key 呢？
+&lt;ul>
+&lt;li>通过下图能够看到，enrty 只有 read.m 与 dirty 同步逻辑中才会修改为 expunged; 并且同步过程不会同步被删除的 key；所以，expunged 状态的 key 不会存在于 dirty 中。&lt;/li>
+&lt;li>如5，dirty map 为 nil 只有两种情况，所以只有修正read 情况。因为 read.m 中包含 key，所以并没有进行原子更新 read。这样，就会出现 dirty =nil 情况；&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>dirty 中不会包含 expunged 状态的 entry，并且包含所有有效 key；&lt;/li>
+&lt;/ol>
+&lt;p>&lt;img src="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-entry-state.jpg"
+width="1206"
+height="1168"
+srcset="https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-entry-state_hu2f1e02e515e351c311ec896043222feb_220210_480x0_resize_q75_box.jpg 480w, https://jasonrd.github.io/blog/blog/p/golang-sync-map/img/map-entry-state_hu2f1e02e515e351c311ec896043222feb_220210_1024x0_resize_q75_box.jpg 1024w"
+loading="lazy"
+class="gallery-image"
+data-flex-grow="103"
+data-flex-basis="247px"
+>&lt;/p>
+&lt;h2 id="reference">reference&lt;/h2>
+&lt;ol>
+&lt;li>&lt;a class="link" href="https://purewhite.io/2020/08/24/golang-sync-map-keys-never-delete/" target="_blank" rel="noopener"
+>sync.Map 引起的 bug&lt;/a>&lt;/li>
+&lt;li>&lt;a class="link" href="https://halfrost.com/go_map_chapter_one/" target="_blank" rel="noopener"
+>如何实现一个线程安全的map&lt;/a>&lt;/li>
+&lt;/ol></description></item><item><title>GO RWMutex 中隐藏的死锁问题</title><link>https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/</link><pubDate>Tue, 09 Nov 2021 00:00:00 +0000</pubDate><guid>https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/</guid><description>&lt;img src="https://jasonrd.github.io/blog/p/golang-rwmutex-deadlock/daedlock.jpeg" alt="Featured image of post GO RWMutex 中隐藏的死锁问题" />&lt;h2 id="读写锁引入">读写锁引入&lt;/h2>
 &lt;p>有下面一段程序，面试官问这段程序有什么问题？&lt;/p>
 &lt;div class="highlight">&lt;div class="chroma">
 &lt;table class="lntable">&lt;tr>&lt;td class="lntd">
